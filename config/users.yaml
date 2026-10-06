@@ -1,0 +1,9 @@
+users:
+  - id: 123456789
+    name: "Alice"
+    username: "alice"
+    locale: "en"
+  - id: 987654321
+    name: "Bob"
+    username: "bob"
+    locale: "es"

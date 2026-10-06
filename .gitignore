@@ -14,6 +14,8 @@
 # Code coverage profiles and other test artifacts
 *.out
 coverage.*
+coverage.out
+coverage_prod.out
 !coverage.go
 *.coverprofile
 profile.cov
@@ -31,3 +33,10 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Application binaries and SQLite data
+homectl
+*.db
+*.db-wal
+*.db-shm
+data/

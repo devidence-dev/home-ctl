@@ -12,7 +12,7 @@ context: |
   Tooling: Docker-first, run build/test/lint in ephemeral containers (`docker run --rm -v "$PWD":/app -w /app <image>`); never install tools on the host. Do not change go.mod/go.sum dependencies without user approval.
   Git: never git commit/push without explicit user confirmation; staging and showing the diff is allowed. Conventional commits.
   Testing: real temporary SQLite (production driver + migrations) for persistence; fakes for Telegram, never live services; table-driven where it helps; assert observable behavior.
-  Validation gate (a change is not done until it passes): `scripts/verify.sh` - gofmt, go vet, golangci-lint (0 issues, no unjustified //nolint), go test -race, and >= 80% production coverage excluding cmd/.
+  Validation gate (a change is not done until it passes): `scripts/verify.sh` - gofmt, go vet, golangci-lint (0 issues, no unjustified //nolint), go test -race, and >= 80% production coverage both in aggregate and for every production package, excluding cmd/ and packages without statements.
 
 rules:
   proposal:

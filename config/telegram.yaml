@@ -1,0 +1,6 @@
+telegram:
+  chat_id: -1001234567890
+  topics:
+    shopping: 42
+    chores: 51
+    reminders: 63

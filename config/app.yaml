@@ -1,0 +1,9 @@
+app:
+  default_locale: "en"
+  database_path: "data/homectl.db"
+  notifications:
+    unresolved_reminder_interval: 1h
+  flow:
+    ttl: 30m
+  calendar:
+    default_time_of_day: "09:00"
