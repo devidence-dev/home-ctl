@@ -1,0 +1,40 @@
+schema: spec-driven
+
+context: |
+  home-ctl: single-binary, self-hosted Go Telegram bot for household management (shopping, chores, reminders) for one household of several configured members, mapped to one private Telegram forum group with Topics plus private chats. SQLite is the source of truth; Telegram is only the interaction layer.
+  Tech stack: Go (version in go.mod), pure-Go SQLite (modernc.org/sqlite, CGO-free), gopkg.in/yaml.v3, log/slog, Telegram Bot API (raw net/http behind a small interface; switch to a small maintained client only if the wrapper grows substantial).
+  Layout (golang-standards/project-layout, only what is needed): cmd/homectl (main package only: config, wiring, startup), internal/ (all application code), config/ (YAML), locales/ (en.yaml, es.yaml), build/package (container build), deployments (Docker Compose), docs/adr (ADRs), scripts/verify.sh (validation gate). No pkg/, api/, web/ or empty placeholder dirs.
+  Domain: definition -> occurrence -> notification attempt for chores and reminders (separate packages sharing recurrence and notification infrastructure). Occurrences carry scheduled_at (nominal, never changed by postponement), due_at (changes on postpone) and completed_at. Recurrence anchor (scheduled | completion) lives on the definition; no-backlog policy (at most one unresolved occurrence per recurring definition); month arithmetic is calendar-based with end-of-month clamping. Only the assignee/target may complete or postpone, enforced in the domain layer; shopping needs household membership only. History is never hard-deleted.
+  Identity and time: Telegram user id is the stable identity (usernames are display only). Household timezone comes from APP_TIMEZONE (IANA, validated at startup, never from YAML); persisted timestamps are UTC; all calendar semantics use the household timezone. Telegram topic ids come from config, never hardcoded.
+  Principles: SQLite is authoritative (Telegram message history is never state); idempotent processing (duplicate callbacks, retries and restarts create no duplicate outcomes or successors); Telegram carries no business logic; external integrations isolated behind interfaces and failing gracefully (failures recorded, never silently resolving anything); secrets only from env (TELEGRAM_BOT_TOKEN) and never logged; standard library first (new dependency needs user approval); SOLID idiomatically (small consumer-defined interfaces, dependencies point inward, no speculative layers). Phase 1 has no LLM dependency; a future planning advisor may only read upcoming occurrences and must never change state without a user-confirmed command.
+  Database: versioned embedded migrations (never edit an applied one), STRICT tables, CHECK constraints for enums, foreign keys ON, WAL + busy_timeout, transactions for multi-step changes, parameterized SQL only.
+  Localization: every user-facing string comes from locale files, per-user locale (default en); code, config keys, DB identifiers, logs, comments, docs and OpenSpec artifacts are in English.
+  Tooling: Docker-first, run build/test/lint in ephemeral containers (`docker run --rm -v "$PWD":/app -w /app <image>`); never install tools on the host. Do not change go.mod/go.sum dependencies without user approval.
+  Git: never git commit/push without explicit user confirmation; staging and showing the diff is allowed. Conventional commits.
+  Testing: real temporary SQLite (production driver + migrations) for persistence; fakes for Telegram, never live services; table-driven where it helps; assert observable behavior.
+  Validation gate (a change is not done until it passes): `scripts/verify.sh` - gofmt, go vet, golangci-lint (0 issues, no unjustified //nolint), go test -race, and >= 80% production coverage excluding cmd/.
+
+rules:
+  proposal:
+    - Keep proposals under 400 words
+    - Always include a "Non-goals" section
+  specs:
+    - Scenarios use concrete values (names, amounts, dates, times), not placeholders
+    - Cover failure paths, retries and idempotency where they apply
+    - Specs describe behavior, not internal names or library choices
+  design:
+    - State how the change complies with the principles in the project context (SQLite source of truth, idempotency, isolated integrations, domain-level authorization)
+  tasks:
+    - Each task is small enough to finish and test in one sitting
+    - Every behavior task names the test that proves it
+    - End with a validation task that runs scripts/verify.sh and requires it to pass
+
+operations:
+  apply:
+    guidance:
+      - Run scripts/verify.sh before reporting a change complete, and never mark a validation task done unless it passed on the current code
+      - Fix lint findings and add tests for uncovered behavior; do not lower the coverage bar, add lint suppressions or widen coverage exclusions to make it pass
+      - Do not commit or push; summarize changed files and propose a commit message
+  archive:
+    guidance:
+      - Do not archive a change unless scripts/verify.sh passed on the current code
