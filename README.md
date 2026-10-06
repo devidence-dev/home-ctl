@@ -37,8 +37,11 @@ docker build -t homectl:latest -f build/package/Dockerfile .
 ```
 
 ### 4. Running
-To run with Docker Compose:
+To run with Docker Compose, create the (unversioned) env and config files first:
 ```bash
+cp deployments/.env.example deployments/.env
+for f in app telegram users; do cp config/$f.example.yaml config/$f.yaml; done
+# edit them, then:
 docker compose -f deployments/docker-compose.yml up -d
 ```
 Or run directly:
@@ -47,6 +50,7 @@ docker run --rm \
   -e TELEGRAM_BOT_TOKEN="your_bot_token" \
   -e APP_TIMEZONE="America/Guayaquil" \
   -v "$PWD/config":/app/config \
+  -v "$PWD/locales":/app/locales \
   -v "$PWD/data":/app/data \
   homectl:latest
 ```

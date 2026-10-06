@@ -40,3 +40,7 @@ homectl
 *.db-wal
 *.db-shm
 data/
+
+# Local config (copy from *.example.yaml)
+config/*.yaml
+!config/*.example.yaml

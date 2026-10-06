@@ -6,8 +6,9 @@ services:
     container_name: homectl
     restart: unless-stopped
     environment:
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-fake_token}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:?set TELEGRAM_BOT_TOKEN in deployments/.env}
       - APP_TIMEZONE=${APP_TIMEZONE:-America/Guayaquil}
     volumes:
       - ../config:/app/config:ro
+      - ../locales:/app/locales:ro
       - ../data:/app/data
