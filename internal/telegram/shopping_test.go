@@ -168,7 +168,7 @@ func TestShoppingFlows_AndList(t *testing.T) {
 	}
 	_ = env.router.HandleUpdate(ctx, uSelect)
 	last = env.client.LastSent()
-	if last == nil || !strings.Contains(last.Text, "Added to the shopping list") {
+	if last == nil || !strings.Contains(last.Text, "Added to the shopping list: 🥚 Eggs") {
 		t.Fatalf("expected item added notice, got: %+v", last)
 	}
 

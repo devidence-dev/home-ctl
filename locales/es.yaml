@@ -39,7 +39,7 @@ shopping:
   item_created: "✅ Creado %s %s"
   item_already_exists: "Ya existe un artículo llamado '%s'."
   item_already_pending: "%s ya está en la lista de compras."
-  items_added: "✅ Agregado a la lista de compras."
+  items_added: "✅ Agregado a la lista de compras: %s %s"
   list_empty: "✅ La lista de compras está vacía. ¡Todo comprado!"
   list_title: "🛒 Lista de compras (toca para marcar comprado):"
   already_purchased: "Ese artículo ya fue comprado por %s."

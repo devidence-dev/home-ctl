@@ -275,7 +275,7 @@ func (r *Router) handleShoppingFlowCallback(ctx context.Context, member *househo
 
 	case CallbackFlowSelect:
 		// User selected item to add to pending list
-		_, err := r.shopping.AddToList(ctx, member.ID, []int64{parsed.TargetID})
+		entries, err := r.shopping.AddToList(ctx, member.ID, []int64{parsed.TargetID})
 		if err != nil {
 			if errors.Is(err, shopping.ErrEntryAlreadyPending) {
 				_ = r.client.AnswerCallbackQuery(ctx, cq.ID, r.i18n.T(locale, "shopping.item_already_pending", r.i18n.T(locale, "shopping.item_fallback")), true)
@@ -286,8 +286,9 @@ func (r *Router) handleShoppingFlowCallback(ctx context.Context, member *househo
 		}
 
 		_ = r.flow.Clear(ctx, flowKey)
-		_ = r.client.AnswerCallbackQuery(ctx, cq.ID, r.i18n.T(locale, "shopping.items_added"), false)
-		_, err = r.client.SendMessage(ctx, cq.Message.Chat.ID, r.i18n.T(locale, "shopping.items_added"), &SendOptions{
+		added := r.i18n.T(locale, "shopping.items_added", entries[0].Item.Emoji, entries[0].Item.Name)
+		_ = r.client.AnswerCallbackQuery(ctx, cq.ID, added, false)
+		_, err = r.client.SendMessage(ctx, cq.Message.Chat.ID, added, &SendOptions{
 			ThreadID: cq.Message.MessageThreadID,
 		})
 		return err
