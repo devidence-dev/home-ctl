@@ -38,6 +38,18 @@ func (r *Router) handleFlowText(ctx context.Context, member *household.Member, m
 	return nil
 }
 
+func (r *Router) closeCallbackKeyboard(ctx context.Context, msg *Message) {
+	if msg == nil || msg.Text == "" {
+		return
+	}
+	err := r.client.EditMessageText(ctx, msg.Chat.ID, msg.MessageID, msg.Text, &EditOptions{
+		ReplyMarkup: &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{}},
+	})
+	if err != nil {
+		r.logger.Debug("failed to close flow keyboard", "chat_id", msg.Chat.ID, "message_id", msg.MessageID, "error", err)
+	}
+}
+
 func (r *Router) handleFlowCallback(ctx context.Context, member *household.Member, cq *CallbackQuery, parsed *ParsedCallback) error {
 	locale := member.Locale
 	if locale == "" {
@@ -56,6 +68,7 @@ func (r *Router) handleFlowCallback(ctx context.Context, member *household.Membe
 
 	state, err := r.flow.Get(ctx, flowKey, nil)
 	if err != nil || state == nil {
+		r.closeCallbackKeyboard(ctx, cq.Message)
 		if parsed.Kind == CallbackFlowCancel {
 			_ = r.flow.Clear(ctx, flowKey)
 			_ = r.client.AnswerCallbackQuery(ctx, cq.ID, r.i18n.T(locale, "general.cancelled"), false)
@@ -65,14 +78,23 @@ func (r *Router) handleFlowCallback(ctx context.Context, member *household.Membe
 		return nil
 	}
 
+	prevStep := state.Step
+	var handlerErr error
 	if strings.HasPrefix(state.Step, "shopping_") {
-		return r.handleShoppingFlowCallback(ctx, member, cq, parsed, state)
+		handlerErr = r.handleShoppingFlowCallback(ctx, member, cq, parsed, state)
+	} else if strings.HasPrefix(state.Step, "chore_") {
+		handlerErr = r.handleChoresFlowCallback(ctx, member, cq, parsed, state)
+	} else if strings.HasPrefix(state.Step, "reminder_") {
+		handlerErr = r.handleRemindersFlowCallback(ctx, member, cq, parsed, state)
 	}
-	if strings.HasPrefix(state.Step, "chore_") {
-		return r.handleChoresFlowCallback(ctx, member, cq, parsed, state)
+
+	if handlerErr != nil {
+		return handlerErr
 	}
-	if strings.HasPrefix(state.Step, "reminder_") {
-		return r.handleRemindersFlowCallback(ctx, member, cq, parsed, state)
+
+	newState, getErr := r.flow.Get(ctx, flowKey, nil)
+	if getErr != nil || newState == nil || newState.Step != prevStep {
+		r.closeCallbackKeyboard(ctx, cq.Message)
 	}
 
 	return nil

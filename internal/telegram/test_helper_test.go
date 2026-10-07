@@ -18,10 +18,11 @@ import (
 )
 
 type sentMessage struct {
-	ChatID   int64
-	ThreadID int64
-	Text     string
-	Markup   *telegram.InlineKeyboardMarkup
+	MessageID int64
+	ChatID    int64
+	ThreadID  int64
+	Text      string
+	Markup    *telegram.InlineKeyboardMarkup
 }
 
 type editedMessage struct {
@@ -51,6 +52,7 @@ type fakeClient struct {
 	callbackAnswers    []callbackAnswer
 	setMyCommandsCalls []setMyCommandsCall
 	onSetMyCommands    func(scope telegram.BotCommandScope, lang string, cmds []telegram.BotCommand) error
+	onEditMessageText  func(ctx context.Context, chatID int64, messageID int64, text string, opts *telegram.EditOptions) error
 }
 
 func newFakeClient() *fakeClient {
@@ -68,17 +70,23 @@ func (f *fakeClient) SendMessage(_ context.Context, chatID int64, text string, o
 		markup = opts.ReplyMarkup
 	}
 	f.sentMessages = append(f.sentMessages, sentMessage{
-		ChatID:   chatID,
-		ThreadID: threadID,
-		Text:     text,
-		Markup:   markup,
+		MessageID: f.nextMsgID,
+		ChatID:    chatID,
+		ThreadID:  threadID,
+		Text:      text,
+		Markup:    markup,
 	})
 	return f.nextMsgID, nil
 }
 
-func (f *fakeClient) EditMessageText(_ context.Context, chatID int64, messageID int64, text string, opts *telegram.EditOptions) error {
+func (f *fakeClient) EditMessageText(ctx context.Context, chatID int64, messageID int64, text string, opts *telegram.EditOptions) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.onEditMessageText != nil {
+		if err := f.onEditMessageText(ctx, chatID, messageID, text, opts); err != nil {
+			return err
+		}
+	}
 	var markup *telegram.InlineKeyboardMarkup
 	if opts != nil {
 		markup = opts.ReplyMarkup
@@ -139,6 +147,14 @@ func (f *fakeClient) LastEdited() *editedMessage {
 	}
 	cp := f.editedMessages[len(f.editedMessages)-1]
 	return &cp
+}
+
+func (f *fakeClient) EditedMessages() []editedMessage {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	cp := make([]editedMessage, len(f.editedMessages))
+	copy(cp, f.editedMessages)
+	return cp
 }
 
 func (f *fakeClient) LastAnswer() *callbackAnswer {
@@ -252,4 +268,12 @@ func setupTestEnv() (*testEnv, error) {
 		flow:      flMgr,
 		i18n:      bundle,
 	}, nil
+}
+
+func flowKeyFor(userID, chatID, threadID int64) flow.Key {
+	return flow.Key{
+		UserID:   userID,
+		ChatID:   chatID,
+		ThreadID: threadID,
+	}
 }

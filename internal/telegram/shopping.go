@@ -253,6 +253,11 @@ func (r *Router) handleShoppingFlowCallback(ctx context.Context, member *househo
 	flowKey := state.Key
 
 	switch parsed.Kind {
+	case CallbackFlowCancel:
+		_ = r.flow.Clear(ctx, flowKey)
+		_ = r.client.AnswerCallbackQuery(ctx, cq.ID, r.i18n.T(locale, "general.cancelled"), false)
+		return nil
+
 	case CallbackFlowNewItem:
 		_ = r.flow.Set(ctx, flowKey, "shopping_new_name", shoppingNewItemPayload{}, r.cfg.FlowTTL)
 		_ = r.client.AnswerCallbackQuery(ctx, cq.ID, "", false)
@@ -281,8 +286,8 @@ func (r *Router) handleShoppingFlowCallback(ctx context.Context, member *househo
 		}
 
 		_ = r.flow.Clear(ctx, flowKey)
-		_ = r.client.AnswerCallbackQuery(ctx, cq.ID, r.i18n.T(locale, "shopping.items_added", 1), false)
-		_, err = r.client.SendMessage(ctx, cq.Message.Chat.ID, r.i18n.T(locale, "shopping.items_added", 1), &SendOptions{
+		_ = r.client.AnswerCallbackQuery(ctx, cq.ID, r.i18n.T(locale, "shopping.items_added"), false)
+		_, err = r.client.SendMessage(ctx, cq.Message.Chat.ID, r.i18n.T(locale, "shopping.items_added"), &SendOptions{
 			ThreadID: cq.Message.MessageThreadID,
 		})
 		return err

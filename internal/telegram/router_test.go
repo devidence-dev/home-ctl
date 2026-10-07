@@ -358,3 +358,76 @@ func TestRouter_MenuGrantsNoAuthorization(t *testing.T) {
 		t.Fatalf("expected unmapped topic notice %q for /list, got: %+v", expectedNotice, last)
 	}
 }
+
+func TestFlow_EditFailureIgnored_FlowStillCompletes(t *testing.T) {
+	env, err := setupTestEnv()
+	if err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+	ctx := context.Background()
+
+	item, err := env.shopping.CreateItem(ctx, 101, "Apples", "🍎")
+	if err != nil {
+		t.Fatalf("CreateItem failed: %v", err)
+	}
+
+	uAdd := telegram.Update{
+		UpdateID: 1,
+		Message: &telegram.Message{
+			MessageID:       10,
+			MessageThreadID: 42,
+			Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
+			From:            &telegram.User{ID: 101, FirstName: "Alice"},
+			Text:            "/add",
+		},
+	}
+	if err := env.router.HandleUpdate(ctx, uAdd); err != nil {
+		t.Fatalf("unexpected error on /add: %v", err)
+	}
+	menu := env.client.LastSent()
+	if menu == nil || menu.Markup == nil || len(menu.Markup.InlineKeyboard) == 0 {
+		t.Fatalf("expected menu message with buttons, got: %+v", menu)
+	}
+
+	// Inject error in EditMessageText to simulate Telegram API rejection / network issue
+	editAttempted := false
+	env.client.onEditMessageText = func(_ context.Context, _ int64, _ int64, _ string, _ *telegram.EditOptions) error {
+		editAttempted = true
+		return errors.New("telegram api error: message is not modified")
+	}
+
+	uPick := telegram.Update{
+		UpdateID: 2,
+		CallbackQuery: &telegram.CallbackQuery{
+			ID:   "cb_pick",
+			From: telegram.User{ID: 101, FirstName: "Alice"},
+			Message: &telegram.Message{
+				MessageID:       menu.MessageID,
+				MessageThreadID: 42,
+				Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
+				Text:            menu.Text,
+			},
+			Data: fmt.Sprintf("fl:sel:%d", item.ID),
+		},
+	}
+	// The handler must succeed without returning the edit error
+	if err := env.router.HandleUpdate(ctx, uPick); err != nil {
+		t.Fatalf("expected flow to complete despite edit failure, got error: %v", err)
+	}
+	if !editAttempted {
+		t.Fatalf("expected EditMessageText to be attempted")
+	}
+
+	// Verify the domain action completed and item is pending
+	pending, err := env.shopping.ListPending(ctx)
+	if err != nil || len(pending) != 1 || pending[0].Item.Name != "Apples" {
+		t.Fatalf("expected item to be added to pending list, got: %+v (err: %v)", pending, err)
+	}
+
+	// Verify the flow was cleared
+	flowKey := flowKeyFor(101, -1001234567890, 42)
+	state, err := env.flow.Get(ctx, flowKey, nil)
+	if err == nil && state != nil {
+		t.Fatalf("expected flow to be cleared, got: %+v", state)
+	}
+}

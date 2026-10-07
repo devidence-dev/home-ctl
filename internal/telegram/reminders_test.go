@@ -351,3 +351,166 @@ func TestReminders_AddFlow_TypedDueAndRecurring(t *testing.T) {
 		t.Fatalf("expected 1 reminder for Bob, got: %+v", res)
 	}
 }
+
+func TestRemindersFlow_KeyboardsClosedOnConfirm_AndRepeatedPressHitsExpired(t *testing.T) {
+	env, err := setupTestEnv()
+	if err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+	ctx := context.Background()
+
+	// 1. Start /add in Reminders topic
+	uAdd := telegram.Update{
+		UpdateID: 1,
+		Message: &telegram.Message{
+			MessageID:       10,
+			MessageThreadID: 63,
+			Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
+			From:            &telegram.User{ID: 101, FirstName: "Alice"},
+			Text:            "/add",
+		},
+	}
+	if err := env.router.HandleUpdate(ctx, uAdd); err != nil {
+		t.Fatalf("unexpected error on /add: %v", err)
+	}
+
+	uTitle := telegram.Update{
+		UpdateID: 2,
+		Message: &telegram.Message{
+			MessageID:       11,
+			MessageThreadID: 63,
+			Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
+			From:            &telegram.User{ID: 101, FirstName: "Alice"},
+			Text:            "Pay internet bill",
+		},
+	}
+	if err := env.router.HandleUpdate(ctx, uTitle); err != nil {
+		t.Fatalf("unexpected error on reminder title: %v", err)
+	}
+
+	targetPrompt := env.client.LastSent()
+	uTarget := telegram.Update{
+		UpdateID: 3,
+		CallbackQuery: &telegram.CallbackQuery{
+			ID:   "cb_target",
+			From: telegram.User{ID: 101, FirstName: "Alice"},
+			Message: &telegram.Message{
+				MessageID:       targetPrompt.MessageID,
+				MessageThreadID: 63,
+				Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
+				Text:            targetPrompt.Text,
+			},
+			Data: "fl:usr:102",
+		},
+	}
+	if err := env.router.HandleUpdate(ctx, uTarget); err != nil {
+		t.Fatalf("unexpected error on target: %v", err)
+	}
+
+	duePrompt := env.client.LastSent()
+	uDue := telegram.Update{
+		UpdateID: 4,
+		CallbackQuery: &telegram.CallbackQuery{
+			ID:   "cb_due",
+			From: telegram.User{ID: 101, FirstName: "Alice"},
+			Message: &telegram.Message{
+				MessageID:       duePrompt.MessageID,
+				MessageThreadID: 63,
+				Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
+				Text:            duePrompt.Text,
+			},
+			Data: "fl:due:tomorrow_18",
+		},
+	}
+	if err := env.router.HandleUpdate(ctx, uDue); err != nil {
+		t.Fatalf("unexpected error on due: %v", err)
+	}
+
+	recPrompt := env.client.LastSent()
+	uRec := telegram.Update{
+		UpdateID: 5,
+		CallbackQuery: &telegram.CallbackQuery{
+			ID:   "cb_rec",
+			From: telegram.User{ID: 101, FirstName: "Alice"},
+			Message: &telegram.Message{
+				MessageID:       recPrompt.MessageID,
+				MessageThreadID: 63,
+				Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
+				Text:            recPrompt.Text,
+			},
+			Data: "fl:rec:none",
+		},
+	}
+	if err := env.router.HandleUpdate(ctx, uRec); err != nil {
+		t.Fatalf("unexpected error on rec: %v", err)
+	}
+
+	summaryMsg := env.client.LastSent()
+	if summaryMsg == nil || !strings.Contains(summaryMsg.Text, "Confirm") {
+		t.Fatalf("expected confirm prompt, got: %+v", summaryMsg)
+	}
+
+	// 2. Confirm closes summary message and creates reminder once
+	uConfirm := telegram.Update{
+		UpdateID: 6,
+		CallbackQuery: &telegram.CallbackQuery{
+			ID:   "cb_confirm",
+			From: telegram.User{ID: 101, FirstName: "Alice"},
+			Message: &telegram.Message{
+				MessageID:       summaryMsg.MessageID,
+				MessageThreadID: 63,
+				Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
+				Text:            summaryMsg.Text,
+			},
+			Data: "fl:ok",
+		},
+	}
+	if err := env.router.HandleUpdate(ctx, uConfirm); err != nil {
+		t.Fatalf("unexpected error on confirm: %v", err)
+	}
+	lastEdited := env.client.LastEdited()
+	if lastEdited == nil || lastEdited.MessageID != summaryMsg.MessageID {
+		t.Fatalf("expected summary message %d to be edited on confirm, got: %+v", summaryMsg.MessageID, lastEdited)
+	}
+	if lastEdited.Markup == nil || len(lastEdited.Markup.InlineKeyboard) != 0 {
+		t.Fatalf("expected empty keyboard on summary message after confirm, got: %+v", lastEdited.Markup)
+	}
+	if lastEdited.Text != summaryMsg.Text {
+		t.Fatalf("expected summary text %q preserved, got: %q", summaryMsg.Text, lastEdited.Text)
+	}
+
+	// Verify Bob has 1 open reminder
+	bobReminders, err := env.reminders.ListMyOpen(ctx, 102)
+	if err != nil || len(bobReminders.Occurrences) != 1 {
+		t.Fatalf("expected 1 reminder for Bob, got: %+v", bobReminders)
+	}
+
+	// 3. Repeated press after closing hits expired path and writes nothing
+	uConfirmRepeat := telegram.Update{
+		UpdateID: 7,
+		CallbackQuery: &telegram.CallbackQuery{
+			ID:   "cb_confirm_repeat",
+			From: telegram.User{ID: 101, FirstName: "Alice"},
+			Message: &telegram.Message{
+				MessageID:       summaryMsg.MessageID,
+				MessageThreadID: 63,
+				Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
+				Text:            summaryMsg.Text,
+			},
+			Data: "fl:ok",
+		},
+	}
+	if err := env.router.HandleUpdate(ctx, uConfirmRepeat); err != nil {
+		t.Fatalf("unexpected error on repeated confirm: %v", err)
+	}
+	ans := env.client.LastAnswer()
+	if ans == nil || !ans.Alert || !strings.Contains(ans.Text, "expired") {
+		t.Fatalf("expected expired alert on repeated confirm, got: %+v", ans)
+	}
+
+	// Verify still exactly 1 reminder for Bob
+	bobRemindersAfter, err := env.reminders.ListMyOpen(ctx, 102)
+	if err != nil || len(bobRemindersAfter.Occurrences) != 1 {
+		t.Fatalf("expected still exactly 1 reminder for Bob after repeated press, got: %+v", bobRemindersAfter)
+	}
+}
