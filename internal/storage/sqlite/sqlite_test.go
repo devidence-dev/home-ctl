@@ -1,13 +1,16 @@
 package sqlite_test
 
 import (
+	"context"
 	"database/sql"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
 
+	"github.com/px1/home-ctl/internal/flow"
 	"github.com/px1/home-ctl/internal/storage/sqlite"
 )
 
@@ -250,5 +253,69 @@ func TestOpen_InvalidPath(t *testing.T) {
 	_, err := sqlite.Open("/dev/null/impossible/dir/test.db")
 	if err == nil {
 		t.Fatalf("expected error when creating db in invalid path, got nil")
+	}
+}
+
+func TestMigrations_ApplyOnExisting0001(t *testing.T) {
+	db := newTestDB(t)
+
+	// Step 1: Run ONLY migration 0001
+	migration0001Content, err := os.ReadFile("migrations/0001_initial.sql")
+	if err != nil {
+		t.Fatalf("failed to read 0001_initial.sql: %v", err)
+	}
+	initialFS := fstest.MapFS{
+		"0001_initial.sql": &fstest.MapFile{
+			Data:    migration0001Content,
+			Mode:    0600,
+			ModTime: time.Now(),
+		},
+	}
+	if err := sqlite.MigrateFromFS(db, initialFS); err != nil {
+		t.Fatalf("failed to apply initial migration 0001: %v", err)
+	}
+
+	// Insert a user and a flow_state row under schema 0001 (without message_id column)
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err = db.Exec(`INSERT INTO users (id, name, username, locale, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		1001, "Alice", "alice", "en", 1, now, now)
+	if err != nil {
+		t.Fatalf("failed to insert user: %v", err)
+	}
+	_, err = db.Exec(`INSERT INTO flow_state (user_id, chat_id, thread_id, step, payload, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		1001, -100, 42, "initial_step", `{"test":true}`, now, now, now)
+	if err != nil {
+		t.Fatalf("failed to insert flow_state on 0001 schema: %v", err)
+	}
+
+	// Step 2: Run RunMigrations, which should apply 0002_flow_message_id.sql
+	if err := sqlite.RunMigrations(db); err != nil {
+		t.Fatalf("RunMigrations failed when upgrading from 0001: %v", err)
+	}
+
+	// Verify the pre-existing flow_state row still loads and has message_id == 0 (NULL)
+	fStore := sqlite.NewFlowStore(db)
+	expTime := time.Now().UTC().Add(10 * time.Minute)
+	// Update expiry to future so Get doesn't expire it
+	_, err = db.Exec(`UPDATE flow_state SET expires_at = ? WHERE user_id = 1001`, expTime.Format(time.RFC3339))
+	if err != nil {
+		t.Fatalf("failed to update expires_at: %v", err)
+	}
+
+	st, err := fStore.Get(context.Background(), flow.Key{UserID: 1001, ChatID: -100, ThreadID: 42}, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("failed to get existing flow after migration: %v", err)
+	}
+	if st.MessageID != 0 {
+		t.Fatalf("expected message_id 0 for pre-existing row, got %d", st.MessageID)
+	}
+
+	// Verify SetMessageID now works on this row
+	if err := fStore.SetMessageID(context.Background(), st.Key, 123456); err != nil {
+		t.Fatalf("SetMessageID failed on migrated row: %v", err)
+	}
+	stUpdated, err := fStore.Get(context.Background(), st.Key, time.Now().UTC())
+	if err != nil || stUpdated.MessageID != 123456 {
+		t.Fatalf("expected message_id 123456, got %d, err=%v", stUpdated.MessageID, err)
 	}
 }

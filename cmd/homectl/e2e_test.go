@@ -25,10 +25,11 @@ import (
 )
 
 type sentMsg struct {
-	ChatID   int64
-	ThreadID int64
-	Text     string
-	Markup   *telegram.InlineKeyboardMarkup
+	MessageID int64
+	ChatID    int64
+	ThreadID  int64
+	Text      string
+	Markup    *telegram.InlineKeyboardMarkup
 }
 
 type editedMsg struct {
@@ -67,10 +68,11 @@ func (f *fakeTG) SendMessage(_ context.Context, chatID int64, text string, opts 
 		markup = opts.ReplyMarkup
 	}
 	f.sent = append(f.sent, sentMsg{
-		ChatID:   chatID,
-		ThreadID: threadID,
-		Text:     text,
-		Markup:   markup,
+		MessageID: f.nextID,
+		ChatID:    chatID,
+		ThreadID:  threadID,
+		Text:      text,
+		Markup:    markup,
 	})
 	return f.nextID, nil
 }
@@ -329,13 +331,14 @@ func TestEndToEnd_WorkflowsWithRestart(t *testing.T) {
 			Text:            "/add",
 		},
 	})
+	addMenu := client.LastSent()
 	_ = router.HandleUpdate(ctx, telegram.Update{
 		UpdateID: 7,
 		CallbackQuery: &telegram.CallbackQuery{
 			ID:   "cb_add_milk",
 			From: telegram.User{ID: 101, FirstName: "Alice"},
 			Message: &telegram.Message{
-				MessageID:       14,
+				MessageID:       addMenu.MessageID,
 				MessageThreadID: shoppingTopicID,
 				Chat:            telegram.Chat{ID: chatID, Type: "supergroup"},
 			},
@@ -447,65 +450,81 @@ func TestEndToEnd_WorkflowsWithRestart(t *testing.T) {
 			Text:            "Vacuum carpets",
 		},
 	})
+	choreMenu := client.LastSent()
 	_ = router.HandleUpdate(ctx, telegram.Update{
 		UpdateID: 13,
 		CallbackQuery: &telegram.CallbackQuery{
 			ID:   "cb_assign_alice",
 			From: telegram.User{ID: 101, FirstName: "Alice"},
 			Message: &telegram.Message{
-				MessageID:       22,
+				MessageID:       choreMenu.MessageID,
 				MessageThreadID: choresTopicID,
 				Chat:            telegram.Chat{ID: chatID, Type: "supergroup"},
 			},
 			Data: "fl:usr:101",
 		},
 	})
-	// Typed date: next Monday 10:00 (2026-10-12 10:00)
+	// Weekly recurrence
 	_ = router.HandleUpdate(ctx, telegram.Update{
 		UpdateID: 14,
 		CallbackQuery: &telegram.CallbackQuery{
-			ID:   "cb_due_custom",
+			ID:   "cb_rec_week",
 			From: telegram.User{ID: 101, FirstName: "Alice"},
 			Message: &telegram.Message{
-				MessageID:       23,
+				MessageID:       choreMenu.MessageID,
 				MessageThreadID: choresTopicID,
 				Chat:            telegram.Chat{ID: chatID, Type: "supergroup"},
 			},
-			Data: "fl:due:custom",
+			Data: "fl:rt:weekly",
 		},
 	})
+	// Interval: every 1 week
 	_ = router.HandleUpdate(ctx, telegram.Update{
 		UpdateID: 15,
+		CallbackQuery: &telegram.CallbackQuery{
+			ID:   "cb_iv_1",
+			From: telegram.User{ID: 101, FirstName: "Alice"},
+			Message: &telegram.Message{
+				MessageID:       choreMenu.MessageID,
+				MessageThreadID: choresTopicID,
+				Chat:            telegram.Chat{ID: chatID, Type: "supergroup"},
+			},
+			Data: "fl:iv:1",
+		},
+	})
+	// Type date
+	_ = router.HandleUpdate(ctx, telegram.Update{
+		UpdateID: 16,
+		CallbackQuery: &telegram.CallbackQuery{
+			ID:   "cb_due_type",
+			From: telegram.User{ID: 101, FirstName: "Alice"},
+			Message: &telegram.Message{
+				MessageID:       choreMenu.MessageID,
+				MessageThreadID: choresTopicID,
+				Chat:            telegram.Chat{ID: chatID, Type: "supergroup"},
+			},
+			Data: "fl:d:type",
+		},
+	})
+	// Typed date: next Monday 10:00 (2026-10-12 10:00)
+	_ = router.HandleUpdate(ctx, telegram.Update{
+		UpdateID: 17,
 		Message: &telegram.Message{
-			MessageID:       24,
+			MessageID:       23,
 			MessageThreadID: choresTopicID,
 			Chat:            telegram.Chat{ID: chatID, Type: "supergroup"},
 			From:            &telegram.User{ID: 101, FirstName: "Alice"},
 			Text:            "2026-10-12 10:00",
 		},
 	})
-	// Weekly recurrence
-	_ = router.HandleUpdate(ctx, telegram.Update{
-		UpdateID: 16,
-		CallbackQuery: &telegram.CallbackQuery{
-			ID:   "cb_rec_week",
-			From: telegram.User{ID: 101, FirstName: "Alice"},
-			Message: &telegram.Message{
-				MessageID:       25,
-				MessageThreadID: choresTopicID,
-				Chat:            telegram.Chat{ID: chatID, Type: "supergroup"},
-			},
-			Data: "fl:rec:weekly",
-		},
-	})
 	// Scheduled anchor
 	_ = router.HandleUpdate(ctx, telegram.Update{
-		UpdateID: 17,
+		UpdateID: 18,
 		CallbackQuery: &telegram.CallbackQuery{
 			ID:   "cb_anc_sched",
 			From: telegram.User{ID: 101, FirstName: "Alice"},
 			Message: &telegram.Message{
-				MessageID:       26,
+				MessageID:       choreMenu.MessageID,
 				MessageThreadID: choresTopicID,
 				Chat:            telegram.Chat{ID: chatID, Type: "supergroup"},
 			},
@@ -514,12 +533,12 @@ func TestEndToEnd_WorkflowsWithRestart(t *testing.T) {
 	})
 	// Confirm
 	_ = router.HandleUpdate(ctx, telegram.Update{
-		UpdateID: 18,
+		UpdateID: 19,
 		CallbackQuery: &telegram.CallbackQuery{
 			ID:   "cb_ok_vacuum",
 			From: telegram.User{ID: 101, FirstName: "Alice"},
 			Message: &telegram.Message{
-				MessageID:       27,
+				MessageID:       choreMenu.MessageID,
 				MessageThreadID: choresTopicID,
 				Chat:            telegram.Chat{ID: chatID, Type: "supergroup"},
 			},
@@ -604,55 +623,57 @@ func TestEndToEnd_WorkflowsWithRestart(t *testing.T) {
 			Text:            "Dentist appointment",
 		},
 	})
+	reminderMenu := client.LastSent()
 	_ = router.HandleUpdate(ctx, telegram.Update{
 		UpdateID: 22,
 		CallbackQuery: &telegram.CallbackQuery{
 			ID:   "cb_target_bob_dentist",
 			From: telegram.User{ID: 101, FirstName: "Alice"},
 			Message: &telegram.Message{
-				MessageID:       32,
+				MessageID:       reminderMenu.MessageID,
 				MessageThreadID: remindersTopicID,
 				Chat:            telegram.Chat{ID: chatID, Type: "supergroup"},
 			},
 			Data: "fl:usr:102",
 		},
 	})
-	// Typed due date
+	// Recurrence type: One time
 	_ = router.HandleUpdate(ctx, telegram.Update{
 		UpdateID: 23,
 		CallbackQuery: &telegram.CallbackQuery{
-			ID:   "cb_due_custom_dentist",
+			ID:   "cb_rec_once_dentist",
 			From: telegram.User{ID: 101, FirstName: "Alice"},
 			Message: &telegram.Message{
-				MessageID:       33,
+				MessageID:       reminderMenu.MessageID,
 				MessageThreadID: remindersTopicID,
 				Chat:            telegram.Chat{ID: chatID, Type: "supergroup"},
 			},
-			Data: "fl:due:custom",
+			Data: "fl:rt:once",
 		},
 	})
+	// Type date
 	_ = router.HandleUpdate(ctx, telegram.Update{
 		UpdateID: 24,
+		CallbackQuery: &telegram.CallbackQuery{
+			ID:   "cb_due_type_dentist",
+			From: telegram.User{ID: 101, FirstName: "Alice"},
+			Message: &telegram.Message{
+				MessageID:       reminderMenu.MessageID,
+				MessageThreadID: remindersTopicID,
+				Chat:            telegram.Chat{ID: chatID, Type: "supergroup"},
+			},
+			Data: "fl:d:type",
+		},
+	})
+	// Typed date: Friday 10:00 (2026-10-16 10:00)
+	_ = router.HandleUpdate(ctx, telegram.Update{
+		UpdateID: 25,
 		Message: &telegram.Message{
-			MessageID:       34,
+			MessageID:       33,
 			MessageThreadID: remindersTopicID,
 			Chat:            telegram.Chat{ID: chatID, Type: "supergroup"},
 			From:            &telegram.User{ID: 101, FirstName: "Alice"},
 			Text:            "2026-10-16 10:00",
-		},
-	})
-	// Recurrence None
-	_ = router.HandleUpdate(ctx, telegram.Update{
-		UpdateID: 25,
-		CallbackQuery: &telegram.CallbackQuery{
-			ID:   "cb_rec_none_dentist",
-			From: telegram.User{ID: 101, FirstName: "Alice"},
-			Message: &telegram.Message{
-				MessageID:       35,
-				MessageThreadID: remindersTopicID,
-				Chat:            telegram.Chat{ID: chatID, Type: "supergroup"},
-			},
-			Data: "fl:rec:none",
 		},
 	})
 	// Confirm
@@ -662,7 +683,7 @@ func TestEndToEnd_WorkflowsWithRestart(t *testing.T) {
 			ID:   "cb_ok_dentist",
 			From: telegram.User{ID: 101, FirstName: "Alice"},
 			Message: &telegram.Message{
-				MessageID:       36,
+				MessageID:       reminderMenu.MessageID,
 				MessageThreadID: remindersTopicID,
 				Chat:            telegram.Chat{ID: chatID, Type: "supergroup"},
 			},

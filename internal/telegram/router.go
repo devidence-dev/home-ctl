@@ -245,7 +245,8 @@ func (r *Router) handleCallbackQuery(ctx context.Context, cq *CallbackQuery) err
 	case CallbackReminderComplete, CallbackReminderPostpone, CallbackReminderDetail, CallbackListReminders:
 		return r.handleReminderCallback(ctx, member, cq, parsed)
 
-	case CallbackFlowCancel, CallbackFlowConfirm, CallbackFlowSelect, CallbackFlowUser, CallbackFlowDue, CallbackFlowRecurrence, CallbackFlowAnchor, CallbackFlowNewItem:
+	case CallbackFlowCancel, CallbackFlowConfirm, CallbackFlowSelect, CallbackFlowUser, CallbackFlowDue, CallbackFlowRecurrence, CallbackFlowAnchor, CallbackFlowNewItem,
+		CallbackFlowNoop, CallbackFlowRecurrenceType, CallbackFlowInterval, CallbackFlowCalendar, CallbackFlowDate, CallbackFlowHour, CallbackFlowMinute:
 		return r.handleFlowCallback(ctx, member, cq, parsed)
 
 	default:

@@ -149,6 +149,14 @@ func (f *fakeClient) LastEdited() *editedMessage {
 	return &cp
 }
 
+func (f *fakeClient) SentMessages() []sentMessage {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	cp := make([]sentMessage, len(f.sentMessages))
+	copy(cp, f.sentMessages)
+	return cp
+}
+
 func (f *fakeClient) EditedMessages() []editedMessage {
 	f.mu.Lock()
 	defer f.mu.Unlock()

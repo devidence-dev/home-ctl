@@ -94,14 +94,15 @@ func TestShoppingFlows_AndList(t *testing.T) {
 		},
 	}
 	_ = env.router.HandleUpdate(ctx, uAdd2)
-	// Click "Add new item"
+	bobMenu := env.client.LastSent()
+	// Click "Add new item" on Bob's menu message
 	uNewBtn := telegram.Update{
 		UpdateID: 5,
 		CallbackQuery: &telegram.CallbackQuery{
 			ID:   "cb_new",
 			From: telegram.User{ID: 102, FirstName: "Bob"},
 			Message: &telegram.Message{
-				MessageID:       14,
+				MessageID:       bobMenu.MessageID,
 				MessageThreadID: 42,
 				Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
 			},
@@ -151,6 +152,7 @@ func TestShoppingFlows_AndList(t *testing.T) {
 		},
 	}
 	_ = env.router.HandleUpdate(ctx, uAdd3)
+	aliceMenu := env.client.LastSent()
 
 	// Select Eggs button
 	uSelect := telegram.Update{
@@ -159,7 +161,7 @@ func TestShoppingFlows_AndList(t *testing.T) {
 			ID:   "cb_sel",
 			From: telegram.User{ID: 101, FirstName: "Alice"},
 			Message: &telegram.Message{
-				MessageID:       18,
+				MessageID:       aliceMenu.MessageID,
 				MessageThreadID: 42,
 				Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
 			},
@@ -603,5 +605,52 @@ func TestShoppingFlow_RejectedPressLeavesKeyboard_AndListPurchaseKeepsRemainingB
 	}
 	if lastEdited.Markup.InlineKeyboard[0][0].Text != "🍞 Bread" {
 		t.Fatalf("expected Bread button to remain, got: %s", lastEdited.Markup.InlineKeyboard[0][0].Text)
+	}
+}
+
+func TestShoppingAdd_StoresMessageID(t *testing.T) {
+	env, err := setupTestEnv()
+	if err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+	ctx := context.Background()
+
+	// Alice runs /add in Shopping topic
+	uAdd := telegram.Update{
+		UpdateID: 1,
+		Message: &telegram.Message{
+			MessageID:       10,
+			MessageThreadID: 42,
+			Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
+			From:            &telegram.User{ID: 101, FirstName: "Alice"},
+			Text:            "/add",
+		},
+	}
+	if err := env.router.HandleUpdate(ctx, uAdd); err != nil {
+		t.Fatalf("/add failed: %v", err)
+	}
+
+	lastSent := env.client.LastSent()
+	if lastSent == nil {
+		t.Fatalf("expected message sent after /add")
+	}
+
+	// Assert the flow state has message_id stored matching lastSent.MessageID
+	flowKey := flowKeyFor(101, -1001234567890, 42)
+	state, err := env.flow.Get(ctx, flowKey, nil)
+	if err != nil {
+		t.Fatalf("flow.Get failed: %v", err)
+	}
+	if state.MessageID != lastSent.MessageID || state.MessageID == 0 {
+		t.Fatalf("expected flow message_id to be %d, got %d", lastSent.MessageID, state.MessageID)
+	}
+
+	// Assert GetByMessage also finds the flow
+	byMsg, err := env.flow.GetByMessage(ctx, -1001234567890, 42, lastSent.MessageID, nil)
+	if err != nil {
+		t.Fatalf("GetByMessage failed: %v", err)
+	}
+	if byMsg.Key.UserID != 101 {
+		t.Fatalf("expected owner 101, got %d", byMsg.Key.UserID)
 	}
 }

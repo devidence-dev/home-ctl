@@ -238,3 +238,20 @@ buttons:
 		t.Fatalf("expected error naming missing key, got %v", err)
 	}
 }
+
+func TestBundle_MissingPickerKeyFailsStartup(t *testing.T) {
+	tempDir := t.TempDir()
+	enContent := `
+buttons:
+  done: "Done"
+`
+	writeTempLocale(t, tempDir, "en.yaml", enContent)
+	badKeys := []string{"picker.prompt_recurrence"}
+	_, err := i18n.NewBundle(tempDir, "en", badKeys, nil)
+	if err == nil {
+		t.Fatalf("expected error for missing picker.prompt_recurrence, got nil")
+	}
+	if !strings.Contains(err.Error(), "picker.prompt_recurrence") {
+		t.Fatalf("expected error naming missing key, got %v", err)
+	}
+}

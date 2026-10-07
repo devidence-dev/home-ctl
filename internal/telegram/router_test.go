@@ -431,3 +431,151 @@ func TestFlow_EditFailureIgnored_FlowStillCompletes(t *testing.T) {
 		t.Fatalf("expected flow to be cleared, got: %+v", state)
 	}
 }
+
+func TestFlowOwnership_EnforcementAndExpiry(t *testing.T) {
+	env, err := setupTestEnv()
+	if err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+	ctx := context.Background()
+
+	// 1. Alice has a Chores flow with a flow message
+	choreFlowKey := flowKeyFor(101, -1001234567890, 51)
+	if err := env.flow.Set(ctx, choreFlowKey, "chore_select_def", nil, 10*time.Minute); err != nil {
+		t.Fatalf("flow.Set failed: %v", err)
+	}
+	choreMsgID := int64(700)
+	if err := env.flow.SetMessageID(ctx, choreFlowKey, choreMsgID); err != nil {
+		t.Fatalf("SetMessageID failed: %v", err)
+	}
+
+	editsBefore := len(env.client.EditedMessages())
+
+	// Bob (102) presses Cancel ("fl:c") on Alice's Chores flow message
+	uBobCancel := telegram.Update{
+		UpdateID: 10,
+		CallbackQuery: &telegram.CallbackQuery{
+			ID:   "cb_bob_cancel",
+			From: telegram.User{ID: 102, FirstName: "Bob"},
+			Message: &telegram.Message{
+				MessageID:       choreMsgID,
+				MessageThreadID: 51,
+				Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
+				Text:            "Select a chore",
+			},
+			Data: "fl:c",
+		},
+	}
+	if err := env.router.HandleUpdate(ctx, uBobCancel); err != nil {
+		t.Fatalf("HandleUpdate failed: %v", err)
+	}
+	ans := env.client.LastAnswer()
+	if ans == nil || ans.Text != env.i18n.T("en", "picker.ownership_notice") {
+		t.Fatalf("expected ownership notice, got %+v", ans)
+	}
+	if len(env.client.EditedMessages()) != editsBefore {
+		t.Fatalf("expected no edits/keyboard closing for non-owner, got edits")
+	}
+
+	// Verify Alice's Chores flow is still intact
+	aliceChoreState, err := env.flow.Get(ctx, choreFlowKey, nil)
+	if err != nil || aliceChoreState.Step != "chore_select_def" {
+		t.Fatalf("expected Alice chores flow to remain intact, got %+v, err=%v", aliceChoreState, err)
+	}
+
+	// 2. Alice starts a Shopping flow with items
+	item, err := env.shopping.CreateItem(ctx, 101, "Milk", "🥛")
+	if err != nil {
+		t.Fatalf("CreateItem failed: %v", err)
+	}
+	uAliceAdd := telegram.Update{
+		UpdateID: 11,
+		Message: &telegram.Message{
+			MessageID:       20,
+			MessageThreadID: 42,
+			Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
+			From:            &telegram.User{ID: 101, FirstName: "Alice"},
+			Text:            "/add",
+		},
+	}
+	if err := env.router.HandleUpdate(ctx, uAliceAdd); err != nil {
+		t.Fatalf("/add failed: %v", err)
+	}
+	shopMsg := env.client.LastSent()
+	if shopMsg == nil {
+		t.Fatalf("expected shopping menu sent")
+	}
+
+	editsBeforeShop := len(env.client.EditedMessages())
+
+	// Bob presses "Milk" on Alice's Shopping menu
+	uBobShop := telegram.Update{
+		UpdateID: 12,
+		CallbackQuery: &telegram.CallbackQuery{
+			ID:   "cb_bob_shop",
+			From: telegram.User{ID: 102, FirstName: "Bob"},
+			Message: &telegram.Message{
+				MessageID:       shopMsg.MessageID,
+				MessageThreadID: 42,
+				Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
+				Text:            shopMsg.Text,
+			},
+			Data: fmt.Sprintf("fl:sel:%d", item.ID),
+		},
+	}
+	if err := env.router.HandleUpdate(ctx, uBobShop); err != nil {
+		t.Fatalf("HandleUpdate failed: %v", err)
+	}
+	ansShop := env.client.LastAnswer()
+	if ansShop == nil || ansShop.Text != env.i18n.T("en", "picker.ownership_notice") {
+		t.Fatalf("expected ownership notice for Bob on shopping menu, got %+v", ansShop)
+	}
+	if len(env.client.EditedMessages()) != editsBeforeShop {
+		t.Fatalf("expected no edits/keyboard closing on Alice's menu, got edits")
+	}
+
+	// Verify nothing was added to shopping list
+	pending, err := env.shopping.ListPending(ctx)
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("expected pending list to remain empty, got %+v", pending)
+	}
+
+	// Verify Alice's shopping flow is intact
+	shopFlowKey := flowKeyFor(101, -1001234567890, 42)
+	aliceShopState, err := env.flow.Get(ctx, shopFlowKey, nil)
+	if err != nil || aliceShopState.Step != "shopping_select_items" {
+		t.Fatalf("expected Alice shopping flow to remain intact, got %+v", aliceShopState)
+	}
+
+	// 3. Alice pressing after expiry
+	env.clock.now = env.clock.now.Add(2 * time.Hour)
+
+	uAliceExpired := telegram.Update{
+		UpdateID: 13,
+		CallbackQuery: &telegram.CallbackQuery{
+			ID:   "cb_alice_exp",
+			From: telegram.User{ID: 101, FirstName: "Alice"},
+			Message: &telegram.Message{
+				MessageID:       choreMsgID,
+				MessageThreadID: 51,
+				Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
+				Text:            "Select a chore",
+			},
+			Data: "fl:c",
+		},
+	}
+	if err := env.router.HandleUpdate(ctx, uAliceExpired); err != nil {
+		t.Fatalf("HandleUpdate failed on expired: %v", err)
+	}
+	ansExp := env.client.LastAnswer()
+	if ansExp == nil || !ansExp.Alert || ansExp.Text != env.i18n.T("en", "general.flow_expired") {
+		t.Fatalf("expected flow_expired alert for Alice after expiry, got %+v", ansExp)
+	}
+	lastEdited := env.client.LastEdited()
+	if lastEdited == nil || lastEdited.MessageID != choreMsgID {
+		t.Fatalf("expected keyboard on chore message %d to be closed after expiry, got %+v", choreMsgID, lastEdited)
+	}
+	if lastEdited.Markup == nil || len(lastEdited.Markup.InlineKeyboard) != 0 {
+		t.Fatalf("expected empty keyboard markup, got %+v", lastEdited.Markup)
+	}
+}

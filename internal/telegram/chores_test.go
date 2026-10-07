@@ -7,18 +7,46 @@ import (
 	"testing"
 	"time"
 
+	"github.com/px1/home-ctl/internal/recurrence"
 	"github.com/px1/home-ctl/internal/telegram"
 )
 
-func TestChores_AddFlow_ConfirmAndCancel(t *testing.T) {
+func pressChoreCallback(ctx context.Context, env *testEnv, updateID int64, userID int64, data string) error {
+	msgID := int64(101)
+	text := ""
+	if last := env.client.LastSent(); last != nil {
+		msgID = last.MessageID
+		text = last.Text
+	}
+	if lastEdit := env.client.LastEdited(); lastEdit != nil && lastEdit.MessageID == msgID {
+		text = lastEdit.Text
+	}
+	return env.router.HandleUpdate(ctx, telegram.Update{
+		UpdateID: updateID,
+		CallbackQuery: &telegram.CallbackQuery{
+			ID:   fmt.Sprintf("cb_%d", updateID),
+			From: telegram.User{ID: userID, FirstName: "Alice"},
+			Message: &telegram.Message{
+				MessageID:       msgID,
+				MessageThreadID: 51,
+				Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
+				Text:            text,
+			},
+			Data: data,
+		},
+	})
+}
+
+// 5.1 & 5.2: One-time chore flow skips interval and anchor, creates exactly 1 occurrence
+// with scheduled_at == due_at, editing the same message ID throughout.
+func TestChoresFlow_OneTime(t *testing.T) {
 	env, err := setupTestEnv()
 	if err != nil {
 		t.Fatalf("failed to setup test env: %v", err)
 	}
-
 	ctx := context.Background()
 
-	// 1. Alice starts /add in Chores topic (51)
+	// 1. /add in Chores topic
 	uAdd := telegram.Update{
 		UpdateID: 1,
 		Message: &telegram.Message{
@@ -30,14 +58,15 @@ func TestChores_AddFlow_ConfirmAndCancel(t *testing.T) {
 		},
 	}
 	if err := env.router.HandleUpdate(ctx, uAdd); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("/add failed: %v", err)
 	}
-	last := env.client.LastSent()
-	if last == nil || !strings.Contains(last.Text, "name for the new chore") {
-		t.Fatalf("expected chore name prompt, got: %+v", last)
+	initialMsg := env.client.LastSent()
+	if initialMsg == nil || !strings.Contains(initialMsg.Text, "name for the new chore") {
+		t.Fatalf("expected chore name prompt, got: %+v", initialMsg)
 	}
+	flowMsgID := initialMsg.MessageID
 
-	// 2. Alice types "Sweep the floor"
+	// 2. Alice types chore name
 	uName := telegram.Update{
 		UpdateID: 2,
 		Message: &telegram.Message{
@@ -45,659 +74,514 @@ func TestChores_AddFlow_ConfirmAndCancel(t *testing.T) {
 			MessageThreadID: 51,
 			Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
 			From:            &telegram.User{ID: 101, FirstName: "Alice"},
-			Text:            "Sweep the floor",
+			Text:            "Clean kitchen",
 		},
 	}
 	if err := env.router.HandleUpdate(ctx, uName); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("name text failed: %v", err)
 	}
-	last = env.client.LastSent()
-	if last == nil || !strings.Contains(last.Text, "assigned to") {
-		t.Fatalf("expected assignee prompt, got: %+v", last)
-	}
-
-	// 3. Bob sends text in the Chores topic while Alice's flow is waiting -> Bob's message ignored!
-	uBobText := telegram.Update{
-		UpdateID: 3,
-		Message: &telegram.Message{
-			MessageID:       12,
-			MessageThreadID: 51,
-			Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
-			From:            &telegram.User{ID: 102, FirstName: "Bob"},
-			Text:            "Hello everyone",
-		},
-	}
-	_ = env.router.HandleUpdate(ctx, uBobText)
-
-	// 4. Alice selects Alice (101) as assignee
-	uAssign := telegram.Update{
-		UpdateID: 4,
-		CallbackQuery: &telegram.CallbackQuery{
-			ID:   "cb_assign",
-			From: telegram.User{ID: 101, FirstName: "Alice"},
-			Message: &telegram.Message{
-				MessageID:       13,
-				MessageThreadID: 51,
-				Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
-			},
-			Data: "fl:usr:101",
-		},
-	}
-	if err := env.router.HandleUpdate(ctx, uAssign); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	last = env.client.LastSent()
-	if last == nil || !strings.Contains(last.Text, "due date/time") {
-		t.Fatalf("expected due date prompt, got: %+v", last)
+	lastEdit := env.client.LastEdited()
+	if lastEdit == nil || lastEdit.MessageID != flowMsgID || !strings.Contains(lastEdit.Text, "Clean kitchen") {
+		t.Fatalf("expected assignee prompt on message %d, got: %+v", flowMsgID, lastEdit)
 	}
 
-	// 5. Alice selects "Choose date/time" custom option
-	uCustom := telegram.Update{
-		UpdateID: 5,
-		CallbackQuery: &telegram.CallbackQuery{
-			ID:   "cb_custom",
-			From: telegram.User{ID: 101, FirstName: "Alice"},
-			Message: &telegram.Message{
-				MessageID:       14,
-				MessageThreadID: 51,
-				Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
-			},
-			Data: "fl:due:custom",
-		},
+	// 3. Assign to Alice (101) -> moves to recurrence type step
+	if err := pressChoreCallback(ctx, env, 3, 101, "fl:usr:101"); err != nil {
+		t.Fatalf("assign callback failed: %v", err)
 	}
-	_ = env.router.HandleUpdate(ctx, uCustom)
-
-	// 6. Alice types invalid date "banana" -> rejected with format guidance
-	uBanana := telegram.Update{
-		UpdateID: 6,
-		Message: &telegram.Message{
-			MessageID:       15,
-			MessageThreadID: 51,
-			Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
-			From:            &telegram.User{ID: 101, FirstName: "Alice"},
-			Text:            "banana",
-		},
-	}
-	_ = env.router.HandleUpdate(ctx, uBanana)
-	last = env.client.LastSent()
-	if last == nil || !strings.Contains(last.Text, "format") {
-		t.Fatalf("expected format error, got: %+v", last)
+	lastEdit = env.client.LastEdited()
+	if lastEdit == nil || lastEdit.MessageID != flowMsgID || !strings.Contains(lastEdit.Text, "recurrence type") {
+		t.Fatalf("expected recurrence type prompt on message %d, got: %+v", flowMsgID, lastEdit)
 	}
 
-	// 7. Alice types past date "2020-01-01 10:00" -> rejected
-	uPast := telegram.Update{
-		UpdateID: 7,
-		Message: &telegram.Message{
-			MessageID:       16,
-			MessageThreadID: 51,
-			Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
-			From:            &telegram.User{ID: 101, FirstName: "Alice"},
-			Text:            "2020-01-01 10:00",
-		},
+	// 4. Alice picks One time (fl:rt:once) -> skips interval, moves to calendar date step
+	if err := pressChoreCallback(ctx, env, 4, 101, "fl:rt:once"); err != nil {
+		t.Fatalf("recurrence type callback failed: %v", err)
 	}
-	_ = env.router.HandleUpdate(ctx, uPast)
-	last = env.client.LastSent()
-	if last == nil || !strings.Contains(last.Text, "past") {
-		t.Fatalf("expected past date error, got: %+v", last)
+	lastEdit = env.client.LastEdited()
+	if lastEdit == nil || lastEdit.MessageID != flowMsgID || !strings.Contains(lastEdit.Text, "first due date") {
+		t.Fatalf("expected calendar date prompt on message %d, got: %+v", flowMsgID, lastEdit)
 	}
 
-	// 8. Alice types valid future date "2026-10-10 10:00"
-	uValidDate := telegram.Update{
-		UpdateID: 8,
-		Message: &telegram.Message{
-			MessageID:       17,
-			MessageThreadID: 51,
-			Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
-			From:            &telegram.User{ID: 101, FirstName: "Alice"},
-			Text:            "2026-10-10 10:00",
-		},
+	// 5. Alice picks date Oct 14 2026 (fl:d:2026-10-14) -> moves to hour step
+	if err := pressChoreCallback(ctx, env, 5, 101, "fl:d:2026-10-14"); err != nil {
+		t.Fatalf("date callback failed: %v", err)
 	}
-	if err := env.router.HandleUpdate(ctx, uValidDate); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	last = env.client.LastSent()
-	if last == nil || !strings.Contains(last.Text, "recurrence") {
-		t.Fatalf("expected recurrence prompt, got: %+v", last)
+	lastEdit = env.client.LastEdited()
+	if lastEdit == nil || lastEdit.MessageID != flowMsgID || !strings.Contains(lastEdit.Text, "hour") {
+		t.Fatalf("expected hour prompt on message %d, got: %+v", flowMsgID, lastEdit)
 	}
 
-	// 9. Alice selects "Weekly"
-	uWeekly := telegram.Update{
-		UpdateID: 9,
-		CallbackQuery: &telegram.CallbackQuery{
-			ID:   "cb_weekly",
-			From: telegram.User{ID: 101, FirstName: "Alice"},
-			Message: &telegram.Message{
-				MessageID:       18,
-				MessageThreadID: 51,
-				Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
-			},
-			Data: "fl:rec:weekly",
-		},
+	// 6. Alice picks hour 10 (fl:h:10) -> moves to minute step
+	if err := pressChoreCallback(ctx, env, 6, 101, "fl:h:10"); err != nil {
+		t.Fatalf("hour callback failed: %v", err)
 	}
-	_ = env.router.HandleUpdate(ctx, uWeekly)
-	last = env.client.LastSent()
-	if last == nil || !strings.Contains(last.Text, "anchor") {
-		t.Fatalf("expected anchor prompt, got: %+v", last)
+	lastEdit = env.client.LastEdited()
+	if lastEdit == nil || lastEdit.MessageID != flowMsgID || !strings.Contains(lastEdit.Text, "minute") {
+		t.Fatalf("expected minute prompt on message %d, got: %+v", flowMsgID, lastEdit)
 	}
 
-	// 10. Alice selects "Scheduled" anchor
-	uScheduled := telegram.Update{
-		UpdateID: 10,
-		CallbackQuery: &telegram.CallbackQuery{
-			ID:   "cb_anchor",
-			From: telegram.User{ID: 101, FirstName: "Alice"},
-			Message: &telegram.Message{
-				MessageID:       19,
-				MessageThreadID: 51,
-				Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
-			},
-			Data: "fl:anc:scheduled",
-		},
+	// 7. Alice picks minute 30 (fl:mi:30) -> skips anchor, moves directly to confirm step
+	if err := pressChoreCallback(ctx, env, 7, 101, "fl:mi:30"); err != nil {
+		t.Fatalf("minute callback failed: %v", err)
 	}
-	_ = env.router.HandleUpdate(ctx, uScheduled)
-	last = env.client.LastSent()
-	if last == nil || !strings.Contains(last.Text, "Confirm") {
-		t.Fatalf("expected confirm prompt, got: %+v", last)
+	lastEdit = env.client.LastEdited()
+	if lastEdit == nil || lastEdit.MessageID != flowMsgID || !strings.Contains(lastEdit.Text, "Confirm") {
+		t.Fatalf("expected confirm prompt on message %d, got: %+v", flowMsgID, lastEdit)
 	}
 
-	// Before confirming: verify NO chore occurrences exist in database!
-	resBefore, err := env.chores.ListMyOpen(ctx, 101)
-	if err != nil || len(resBefore.Occurrences) != 0 {
-		t.Fatalf("no occurrences should exist before confirm, got: %+v", resBefore)
+	// 8. Confirm (fl:ok) -> closes keyboard, creates occurrence
+	if err := pressChoreCallback(ctx, env, 8, 101, "fl:ok"); err != nil {
+		t.Fatalf("confirm callback failed: %v", err)
+	}
+	lastEdit = env.client.LastEdited()
+	if lastEdit == nil || lastEdit.MessageID != flowMsgID || len(lastEdit.Markup.InlineKeyboard) != 0 {
+		t.Fatalf("expected closed keyboard on message %d after confirm, got: %+v", flowMsgID, lastEdit)
 	}
 
-	// 11. Alice confirms ("fl:ok")
-	uConfirm := telegram.Update{
-		UpdateID: 11,
-		CallbackQuery: &telegram.CallbackQuery{
-			ID:   "cb_confirm",
-			From: telegram.User{ID: 101, FirstName: "Alice"},
-			Message: &telegram.Message{
-				MessageID:       20,
-				MessageThreadID: 51,
-				Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
-			},
-			Data: "fl:ok",
-		},
+	// Assert exactly 1 message was sent through the entire creation flow
+	if len(env.client.SentMessages()) != 1 {
+		t.Fatalf("expected exactly 1 message sent, got %d", len(env.client.SentMessages()))
 	}
-	if err := env.router.HandleUpdate(ctx, uConfirm); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	last = env.client.LastSent()
-	if last == nil || !strings.Contains(last.Text, "scheduled") {
-		t.Fatalf("expected scheduled confirmation, got: %+v", last)
+	// Assert all edits targeted the same flowMsgID
+	for _, em := range env.client.EditedMessages() {
+		if em.MessageID != flowMsgID {
+			t.Fatalf("expected edit to message %d, got %d", flowMsgID, em.MessageID)
+		}
 	}
 
-	// After confirm: verify occurrence exists!
-	resAfter, err := env.chores.ListMyOpen(ctx, 101)
-	if err != nil || len(resAfter.Occurrences) != 1 {
-		t.Fatalf("expected 1 occurrence, got: %+v", resAfter)
-	}
-	occ := resAfter.Occurrences[0]
-	if occ.AssigneeID != 101 || occ.Status != "open" {
-		t.Fatalf("unexpected occurrence: %+v", occ)
-	}
-}
-
-func TestChores_AddFlow_CancelLeavesNoData(t *testing.T) {
-	env, err := setupTestEnv()
-	if err != nil {
-		t.Fatalf("failed to setup test env: %v", err)
-	}
-
-	ctx := context.Background()
-
-	// 1. /add in chores
-	uAdd := telegram.Update{
-		UpdateID: 1,
-		Message: &telegram.Message{
-			MessageID:       10,
-			MessageThreadID: 51,
-			Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
-			From:            &telegram.User{ID: 101, FirstName: "Alice"},
-			Text:            "/add",
-		},
-	}
-	_ = env.router.HandleUpdate(ctx, uAdd)
-
-	// 2. Types name "Dust shelves"
-	uName := telegram.Update{
-		UpdateID: 2,
-		Message: &telegram.Message{
-			MessageID:       11,
-			MessageThreadID: 51,
-			Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
-			From:            &telegram.User{ID: 101, FirstName: "Alice"},
-			Text:            "Dust shelves",
-		},
-	}
-	_ = env.router.HandleUpdate(ctx, uName)
-
-	// 3. Alice presses Cancel at assignee step ("fl:c")
-	uCancel := telegram.Update{
-		UpdateID: 3,
-		CallbackQuery: &telegram.CallbackQuery{
-			ID:   "cb_cancel",
-			From: telegram.User{ID: 101, FirstName: "Alice"},
-			Message: &telegram.Message{
-				MessageID:       12,
-				MessageThreadID: 51,
-				Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
-			},
-			Data: "fl:c",
-		},
-	}
-	if err := env.router.HandleUpdate(ctx, uCancel); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	last := env.client.LastSent()
-	if last == nil || !strings.Contains(last.Text, "cancelled") {
-		t.Fatalf("expected cancelled message, got: %+v", last)
-	}
-
-	// Verify no chore definition and no occurrences exist
-	defs, err := env.chores.ListDefinitions(ctx)
-	if err != nil || len(defs) != 0 {
-		t.Fatalf("expected 0 definitions, got: %+v", defs)
-	}
-}
-
-func TestChores_AddFlow_ExistingDefinition(t *testing.T) {
-	env, err := setupTestEnv()
-	if err != nil {
-		t.Fatalf("failed to setup test env: %v", err)
-	}
-
-	ctx := context.Background()
-
-	// Create definition beforehand
-	def, err := env.chores.CreateDefinition(ctx, 101, "Mow lawn", "🌱", "", nil)
-	if err != nil {
-		t.Fatalf("failed to create def: %v", err)
-	}
-
-	// 1. /add in Chores topic -> lists existing defs
-	uAdd := telegram.Update{
-		UpdateID: 1,
-		Message: &telegram.Message{
-			MessageID:       10,
-			MessageThreadID: 51,
-			Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
-			From:            &telegram.User{ID: 101, FirstName: "Alice"},
-			Text:            "/add",
-		},
-	}
-	if err := env.router.HandleUpdate(ctx, uAdd); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	// 2. Select Mow lawn ("fl:sel:<def.ID>")
-	uSel := telegram.Update{
-		UpdateID: 2,
-		CallbackQuery: &telegram.CallbackQuery{
-			ID:   "cb_sel_lawn",
-			From: telegram.User{ID: 101, FirstName: "Alice"},
-			Message: &telegram.Message{
-				MessageID:       11,
-				MessageThreadID: 51,
-				Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
-			},
-			Data: fmt.Sprintf("fl:sel:%d", def.ID),
-		},
-	}
-	_ = env.router.HandleUpdate(ctx, uSel)
-
-	// 3. Assign to Bob (102)
-	uAssign := telegram.Update{
-		UpdateID: 3,
-		CallbackQuery: &telegram.CallbackQuery{
-			ID:   "cb_assign_bob",
-			From: telegram.User{ID: 101, FirstName: "Alice"},
-			Message: &telegram.Message{
-				MessageID:       12,
-				MessageThreadID: 51,
-				Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
-			},
-			Data: "fl:usr:102",
-		},
-	}
-	_ = env.router.HandleUpdate(ctx, uAssign)
-
-	// 4. Due date preset "today_18"
-	uDue := telegram.Update{
-		UpdateID: 4,
-		CallbackQuery: &telegram.CallbackQuery{
-			ID:   "cb_due_today",
-			From: telegram.User{ID: 101, FirstName: "Alice"},
-			Message: &telegram.Message{
-				MessageID:       13,
-				MessageThreadID: 51,
-				Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
-			},
-			Data: "fl:due:today_18",
-		},
-	}
-	_ = env.router.HandleUpdate(ctx, uDue)
-
-	// 5. Recurrence "daily"
-	uDaily := telegram.Update{
-		UpdateID: 5,
-		CallbackQuery: &telegram.CallbackQuery{
-			ID:   "cb_rec_daily",
-			From: telegram.User{ID: 101, FirstName: "Alice"},
-			Message: &telegram.Message{
-				MessageID:       14,
-				MessageThreadID: 51,
-				Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
-			},
-			Data: "fl:rec:daily",
-		},
-	}
-	_ = env.router.HandleUpdate(ctx, uDaily)
-
-	// 6. Anchor "completion"
-	uComp := telegram.Update{
-		UpdateID: 6,
-		CallbackQuery: &telegram.CallbackQuery{
-			ID:   "cb_anc_comp",
-			From: telegram.User{ID: 101, FirstName: "Alice"},
-			Message: &telegram.Message{
-				MessageID:       15,
-				MessageThreadID: 51,
-				Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
-			},
-			Data: "fl:anc:completion",
-		},
-	}
-	_ = env.router.HandleUpdate(ctx, uComp)
-
-	// 7. Confirm
-	uConfirm := telegram.Update{
-		UpdateID: 7,
-		CallbackQuery: &telegram.CallbackQuery{
-			ID:   "cb_ok_lawn",
-			From: telegram.User{ID: 101, FirstName: "Alice"},
-			Message: &telegram.Message{
-				MessageID:       16,
-				MessageThreadID: 51,
-				Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
-			},
-			Data: "fl:ok",
-		},
-	}
-	if err := env.router.HandleUpdate(ctx, uConfirm); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	// Verify occurrence exists for Bob
-	res, err := env.chores.ListMyOpen(ctx, 102)
+	// Verify occurrence in database: scheduled_at == due_at == Oct 14 2026 10:30 local
+	res, err := env.chores.ListMyOpen(ctx, 101)
 	if err != nil || len(res.Occurrences) != 1 {
-		t.Fatalf("expected 1 chore for Bob, got: %+v", res)
+		t.Fatalf("expected 1 occurrence for Alice, got: %+v (err=%v)", res, err)
+	}
+	occ := res.Occurrences[0]
+	wantDue := time.Date(2026, 10, 14, 10, 30, 0, 0, env.clock.loc).UTC()
+	if !occ.DueAt.Equal(wantDue) {
+		t.Fatalf("expected due_at %v, got %v", wantDue, occ.DueAt)
+	}
+	if !occ.ScheduledAt.Equal(occ.DueAt) {
+		t.Fatalf("expected scheduled_at == due_at, got scheduled_at=%v due_at=%v", occ.ScheduledAt, occ.DueAt)
+	}
+	if occ.Definition.RecurrenceInterval != nil {
+		t.Fatalf("expected nil recurrence for one-time chore, got %+v", occ.Definition.RecurrenceInterval)
 	}
 }
 
-func TestFlow_Expired(t *testing.T) {
+// 5.1: Weekly every 2 weeks from Oct 14 2026 (slots Oct 28 and Nov 11)
+func TestChoresFlow_WeeklyEvery2Weeks(t *testing.T) {
 	env, err := setupTestEnv()
 	if err != nil {
 		t.Fatalf("failed to setup test env: %v", err)
 	}
-
 	ctx := context.Background()
 
-	// Alice starts /add in chores
-	uAdd := telegram.Update{
+	_ = env.router.HandleUpdate(ctx, telegram.Update{
 		UpdateID: 1,
 		Message: &telegram.Message{
-			MessageID:       10,
-			MessageThreadID: 51,
-			Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
-			From:            &telegram.User{ID: 101, FirstName: "Alice"},
-			Text:            "/add",
+			MessageID: 10, MessageThreadID: 51,
+			Chat: telegram.Chat{ID: -1001234567890, Type: "supergroup"},
+			From: &telegram.User{ID: 101, FirstName: "Alice"}, Text: "/add",
 		},
-	}
-	_ = env.router.HandleUpdate(ctx, uAdd)
-
-	// Advance time past TTL (35 minutes)
-	env.clock.now = env.clock.now.Add(35 * time.Minute)
-
-	// Alice clicks a button on expired flow
-	uClick := telegram.Update{
+	})
+	_ = env.router.HandleUpdate(ctx, telegram.Update{
 		UpdateID: 2,
-		CallbackQuery: &telegram.CallbackQuery{
-			ID:   "cb_expired",
-			From: telegram.User{ID: 101, FirstName: "Alice"},
-			Message: &telegram.Message{
-				MessageID:       11,
-				MessageThreadID: 51,
-				Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
-			},
-			Data: "fl:new",
+		Message: &telegram.Message{
+			MessageID: 11, MessageThreadID: 51,
+			Chat: telegram.Chat{ID: -1001234567890, Type: "supergroup"},
+			From: &telegram.User{ID: 101, FirstName: "Alice"}, Text: "Mow lawn",
 		},
+	})
+	_ = pressChoreCallback(ctx, env, 3, 101, "fl:usr:101")
+	_ = pressChoreCallback(ctx, env, 4, 101, "fl:rt:weekly")
+	_ = pressChoreCallback(ctx, env, 5, 101, "fl:iv:2")
+	_ = pressChoreCallback(ctx, env, 6, 101, "fl:d:2026-10-14")
+	_ = pressChoreCallback(ctx, env, 7, 101, "fl:h:10")
+	_ = pressChoreCallback(ctx, env, 8, 101, "fl:mi:30")
+	_ = pressChoreCallback(ctx, env, 9, 101, "fl:anc:scheduled")
+	_ = pressChoreCallback(ctx, env, 10, 101, "fl:ok")
+
+	res, err := env.chores.ListMyOpen(ctx, 101)
+	if err != nil || len(res.Occurrences) != 1 {
+		t.Fatalf("expected 1 occurrence, got: %+v", res)
 	}
-	_ = env.router.HandleUpdate(ctx, uClick)
-	ans := env.client.LastAnswer()
-	if ans == nil || !strings.Contains(ans.Text, "expired") {
-		t.Fatalf("expected expired flow alert, got: %+v", ans)
+	occ := res.Occurrences[0]
+	firstSlot := time.Date(2026, 10, 14, 10, 30, 0, 0, env.clock.loc).UTC()
+	if !occ.DueAt.Equal(firstSlot) {
+		t.Fatalf("expected first slot %v, got %v", firstSlot, occ.DueAt)
+	}
+
+	rule := recurrence.Rule{Interval: 2, Unit: recurrence.UnitWeek, Anchor: recurrence.AnchorScheduled}
+	slot2, err := recurrence.NextSlot(rule, occ.ScheduledAt, occ.ScheduledAt, occ.ScheduledAt, env.clock.loc)
+	if err != nil {
+		t.Fatalf("NextSlot error: %v", err)
+	}
+	wantSlot2 := time.Date(2026, 10, 28, 10, 30, 0, 0, env.clock.loc).UTC()
+	if !slot2.Equal(wantSlot2) {
+		t.Fatalf("expected slot 2 %v, got %v", wantSlot2, slot2)
+	}
+
+	slot3, err := recurrence.NextSlot(rule, occ.ScheduledAt, slot2, slot2, env.clock.loc)
+	if err != nil {
+		t.Fatalf("NextSlot error: %v", err)
+	}
+	wantSlot3 := time.Date(2026, 11, 11, 10, 30, 0, 0, env.clock.loc).UTC()
+	if !slot3.Equal(wantSlot3) {
+		t.Fatalf("expected slot 3 %v, got %v", wantSlot3, slot3)
 	}
 }
 
-func TestChoresFlow_KeyboardsClosedOnAssigneePick_Cancel_AndConfirm(t *testing.T) {
+// 5.1: Monthly from Jan 31 2027 (Feb 28, Mar 31)
+func TestChoresFlow_MonthlyFromJan31(t *testing.T) {
 	env, err := setupTestEnv()
 	if err != nil {
-		t.Fatalf("setup failed: %v", err)
+		t.Fatalf("failed to setup test env: %v", err)
 	}
 	ctx := context.Background()
 
-	// 1. Assignee pick closes its step message and advances the flow
-	uAdd := telegram.Update{
+	_ = env.router.HandleUpdate(ctx, telegram.Update{
 		UpdateID: 1,
 		Message: &telegram.Message{
-			MessageID:       10,
-			MessageThreadID: 51,
-			Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
-			From:            &telegram.User{ID: 101, FirstName: "Alice"},
-			Text:            "/add",
+			MessageID: 10, MessageThreadID: 51,
+			Chat: telegram.Chat{ID: -1001234567890, Type: "supergroup"},
+			From: &telegram.User{ID: 101, FirstName: "Alice"}, Text: "/add",
 		},
-	}
-	if err := env.router.HandleUpdate(ctx, uAdd); err != nil {
-		t.Fatalf("unexpected error on /add: %v", err)
-	}
-
-	uName := telegram.Update{
+	})
+	_ = env.router.HandleUpdate(ctx, telegram.Update{
 		UpdateID: 2,
 		Message: &telegram.Message{
-			MessageID:       11,
-			MessageThreadID: 51,
-			Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
-			From:            &telegram.User{ID: 101, FirstName: "Alice"},
-			Text:            "Take out trash",
+			MessageID: 11, MessageThreadID: 51,
+			Chat: telegram.Chat{ID: -1001234567890, Type: "supergroup"},
+			From: &telegram.User{ID: 101, FirstName: "Alice"}, Text: "Monthly check",
 		},
+	})
+	_ = pressChoreCallback(ctx, env, 3, 101, "fl:usr:101")
+	_ = pressChoreCallback(ctx, env, 4, 101, "fl:rt:monthly")
+	_ = pressChoreCallback(ctx, env, 5, 101, "fl:iv:1")
+	_ = pressChoreCallback(ctx, env, 6, 101, "fl:d:2027-01-31")
+	_ = pressChoreCallback(ctx, env, 7, 101, "fl:h:09")
+	_ = pressChoreCallback(ctx, env, 8, 101, "fl:mi:00")
+	_ = pressChoreCallback(ctx, env, 9, 101, "fl:anc:scheduled")
+	_ = pressChoreCallback(ctx, env, 10, 101, "fl:ok")
+
+	res, err := env.chores.ListMyOpen(ctx, 101)
+	if err != nil || len(res.Occurrences) != 1 {
+		t.Fatalf("expected 1 occurrence, got: %+v", res)
 	}
-	if err := env.router.HandleUpdate(ctx, uName); err != nil {
-		t.Fatalf("unexpected error on chore name: %v", err)
-	}
-	assigneePrompt := env.client.LastSent()
-	if assigneePrompt == nil || assigneePrompt.Markup == nil || len(assigneePrompt.Markup.InlineKeyboard) == 0 {
-		t.Fatalf("expected assignee prompt with buttons, got: %+v", assigneePrompt)
+	occ := res.Occurrences[0]
+	slot1 := time.Date(2027, 1, 31, 9, 0, 0, 0, env.clock.loc).UTC()
+	if !occ.DueAt.Equal(slot1) {
+		t.Fatalf("expected slot 1 %v, got %v", slot1, occ.DueAt)
 	}
 
-	// Alice selects Bob (102) as assignee
-	uPickAssignee := telegram.Update{
-		UpdateID: 3,
-		CallbackQuery: &telegram.CallbackQuery{
-			ID:   "cb_assign_bob",
-			From: telegram.User{ID: 101, FirstName: "Alice"},
-			Message: &telegram.Message{
-				MessageID:       assigneePrompt.MessageID,
-				MessageThreadID: 51,
-				Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
-				Text:            assigneePrompt.Text,
-			},
-			Data: "fl:usr:102",
+	rule := recurrence.Rule{Interval: 1, Unit: recurrence.UnitMonth, Anchor: recurrence.AnchorScheduled}
+	slot2, err := recurrence.NextSlot(rule, occ.ScheduledAt, occ.ScheduledAt, occ.ScheduledAt, env.clock.loc)
+	if err != nil {
+		t.Fatalf("NextSlot error: %v", err)
+	}
+	wantSlot2 := time.Date(2027, 2, 28, 9, 0, 0, 0, env.clock.loc).UTC()
+	if !slot2.Equal(wantSlot2) {
+		t.Fatalf("expected slot 2 %v, got %v", wantSlot2, slot2)
+	}
+
+	slot3, err := recurrence.NextSlot(rule, occ.ScheduledAt, slot2, slot2, env.clock.loc)
+	if err != nil {
+		t.Fatalf("NextSlot error: %v", err)
+	}
+	wantSlot3 := time.Date(2027, 3, 31, 9, 0, 0, 0, env.clock.loc).UTC()
+	if !slot3.Equal(wantSlot3) {
+		t.Fatalf("expected slot 3 %v, got %v", wantSlot3, slot3)
+	}
+}
+
+// 5.1: "every 3 months from completion"
+func TestChoresFlow_Every3MonthsFromCompletion(t *testing.T) {
+	env, err := setupTestEnv()
+	if err != nil {
+		t.Fatalf("failed to setup test env: %v", err)
+	}
+	ctx := context.Background()
+
+	_ = env.router.HandleUpdate(ctx, telegram.Update{
+		UpdateID: 1,
+		Message: &telegram.Message{
+			MessageID: 10, MessageThreadID: 51,
+			Chat: telegram.Chat{ID: -1001234567890, Type: "supergroup"},
+			From: &telegram.User{ID: 101, FirstName: "Alice"}, Text: "/add",
 		},
-	}
-	if err := env.router.HandleUpdate(ctx, uPickAssignee); err != nil {
-		t.Fatalf("unexpected error on assignee pick: %v", err)
-	}
-	lastEdited := env.client.LastEdited()
-	if lastEdited == nil || lastEdited.MessageID != assigneePrompt.MessageID {
-		t.Fatalf("expected assignee prompt message %d to be edited, got: %+v", assigneePrompt.MessageID, lastEdited)
-	}
-	if lastEdited.Markup == nil || len(lastEdited.Markup.InlineKeyboard) != 0 {
-		t.Fatalf("expected empty keyboard on assignee step after pick, got: %+v", lastEdited.Markup)
-	}
-	if lastEdited.Text != assigneePrompt.Text {
-		t.Fatalf("expected assignee prompt text %q preserved, got: %q", assigneePrompt.Text, lastEdited.Text)
-	}
-
-	// Continue to confirm: select due preset and recurrence
-	duePrompt := env.client.LastSent()
-	uDue := telegram.Update{
-		UpdateID: 4,
-		CallbackQuery: &telegram.CallbackQuery{
-			ID:   "cb_due",
-			From: telegram.User{ID: 101, FirstName: "Alice"},
-			Message: &telegram.Message{
-				MessageID:       duePrompt.MessageID,
-				MessageThreadID: 51,
-				Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
-				Text:            duePrompt.Text,
-			},
-			Data: "fl:due:tomorrow_18",
+	})
+	_ = env.router.HandleUpdate(ctx, telegram.Update{
+		UpdateID: 2,
+		Message: &telegram.Message{
+			MessageID: 11, MessageThreadID: 51,
+			Chat: telegram.Chat{ID: -1001234567890, Type: "supergroup"},
+			From: &telegram.User{ID: 101, FirstName: "Alice"}, Text: "Change water purifier filter",
 		},
+	})
+	_ = pressChoreCallback(ctx, env, 3, 101, "fl:usr:101")
+	_ = pressChoreCallback(ctx, env, 4, 101, "fl:rt:monthly")
+	_ = pressChoreCallback(ctx, env, 5, 101, "fl:iv:3")
+	_ = pressChoreCallback(ctx, env, 6, 101, "fl:d:2026-10-10")
+	_ = pressChoreCallback(ctx, env, 7, 101, "fl:h:10")
+	_ = pressChoreCallback(ctx, env, 8, 101, "fl:mi:30")
+	_ = pressChoreCallback(ctx, env, 9, 101, "fl:anc:completion")
+	_ = pressChoreCallback(ctx, env, 10, 101, "fl:ok")
+
+	res, err := env.chores.ListMyOpen(ctx, 101)
+	if err != nil || len(res.Occurrences) != 1 {
+		t.Fatalf("expected 1 occurrence, got: %+v", res)
 	}
-	if err := env.router.HandleUpdate(ctx, uDue); err != nil {
-		t.Fatalf("unexpected error on due preset: %v", err)
+	occ := res.Occurrences[0]
+	if occ.Definition.RecurrenceInterval == nil || *occ.Definition.RecurrenceInterval != 3 {
+		t.Fatalf("expected interval 3, got %+v", occ.Definition.RecurrenceInterval)
+	}
+	if occ.Definition.RecurrenceUnit == nil || *occ.Definition.RecurrenceUnit != "month" {
+		t.Fatalf("expected unit month, got %+v", occ.Definition.RecurrenceUnit)
+	}
+	if occ.Definition.RecurrenceAnchor == nil || *occ.Definition.RecurrenceAnchor != "completion" {
+		t.Fatalf("expected anchor completion, got %+v", occ.Definition.RecurrenceAnchor)
+	}
+}
+
+// 5.1: Recurring definition skips recurrence type, interval, and anchor
+func TestChoresFlow_ExistingRecurringDefinition(t *testing.T) {
+	env, err := setupTestEnv()
+	if err != nil {
+		t.Fatalf("failed to setup test env: %v", err)
+	}
+	ctx := context.Background()
+
+	// Pre-existing recurring definition
+	rule := &recurrence.Rule{Interval: 2, Unit: recurrence.UnitWeek, Anchor: recurrence.AnchorScheduled}
+	def, err := env.chores.CreateDefinition(ctx, 101, "Mow lawn", "🌱", "", rule)
+	if err != nil {
+		t.Fatalf("CreateDefinition failed: %v", err)
 	}
 
-	recPrompt := env.client.LastSent()
-	uRec := telegram.Update{
-		UpdateID: 5,
-		CallbackQuery: &telegram.CallbackQuery{
-			ID:   "cb_rec",
-			From: telegram.User{ID: 101, FirstName: "Alice"},
-			Message: &telegram.Message{
-				MessageID:       recPrompt.MessageID,
-				MessageThreadID: 51,
-				Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
-				Text:            recPrompt.Text,
-			},
-			Data: "fl:rec:none",
+	_ = env.router.HandleUpdate(ctx, telegram.Update{
+		UpdateID: 1,
+		Message: &telegram.Message{
+			MessageID: 10, MessageThreadID: 51,
+			Chat: telegram.Chat{ID: -1001234567890, Type: "supergroup"},
+			From: &telegram.User{ID: 101, FirstName: "Alice"}, Text: "/add",
 		},
-	}
-	if err := env.router.HandleUpdate(ctx, uRec); err != nil {
-		t.Fatalf("unexpected error on recurrence: %v", err)
+	})
+	_ = pressChoreCallback(ctx, env, 2, 101, fmt.Sprintf("fl:sel:%d", def.ID))
+	_ = pressChoreCallback(ctx, env, 3, 101, "fl:usr:102") // Bob
+
+	// Should skip recurrence steps and show calendar date prompt directly!
+	lastEdit := env.client.LastEdited()
+	if lastEdit == nil || !strings.Contains(lastEdit.Text, "first due date") {
+		t.Fatalf("expected date prompt, got: %+v", lastEdit)
 	}
 
-	summaryMsg := env.client.LastSent()
-	if summaryMsg == nil || !strings.Contains(summaryMsg.Text, "Confirm") {
-		t.Fatalf("expected confirm summary message, got: %+v", summaryMsg)
+	_ = pressChoreCallback(ctx, env, 4, 101, "fl:d:tomorrow")
+	_ = pressChoreCallback(ctx, env, 5, 101, "fl:h:18")
+	_ = pressChoreCallback(ctx, env, 6, 101, "fl:mi:00")
+
+	// Should skip anchor step and show confirm prompt directly!
+	lastEdit = env.client.LastEdited()
+	if lastEdit == nil || !strings.Contains(lastEdit.Text, "Confirm") {
+		t.Fatalf("expected confirm prompt, got: %+v", lastEdit)
 	}
 
-	// Confirm press closes summary message and creates chore once
-	uConfirm := telegram.Update{
-		UpdateID: 6,
-		CallbackQuery: &telegram.CallbackQuery{
-			ID:   "cb_confirm",
-			From: telegram.User{ID: 101, FirstName: "Alice"},
-			Message: &telegram.Message{
-				MessageID:       summaryMsg.MessageID,
-				MessageThreadID: 51,
-				Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
-				Text:            summaryMsg.Text,
-			},
-			Data: "fl:ok",
-		},
-	}
-	if err := env.router.HandleUpdate(ctx, uConfirm); err != nil {
-		t.Fatalf("unexpected error on confirm: %v", err)
-	}
-	lastEdited = env.client.LastEdited()
-	if lastEdited == nil || lastEdited.MessageID != summaryMsg.MessageID {
-		t.Fatalf("expected summary message %d to be edited on confirm, got: %+v", summaryMsg.MessageID, lastEdited)
-	}
-	if lastEdited.Markup == nil || len(lastEdited.Markup.InlineKeyboard) != 0 {
-		t.Fatalf("expected empty keyboard on summary message after confirm, got: %+v", lastEdited.Markup)
-	}
-	if lastEdited.Text != summaryMsg.Text {
-		t.Fatalf("expected summary text preserved, got: %q", lastEdited.Text)
-	}
+	_ = pressChoreCallback(ctx, env, 7, 101, "fl:ok")
 
-	// Verify chore created once
 	resBob, err := env.chores.ListMyOpen(ctx, 102)
 	if err != nil || len(resBob.Occurrences) != 1 {
-		t.Fatalf("expected exactly 1 chore for Bob, got: %+v", resBob)
+		t.Fatalf("expected 1 occurrence for Bob, got: %+v", resBob)
 	}
-	if resBob.Occurrences[0].Definition.Name != "Take out trash" {
-		t.Fatalf("expected chore name 'Take out trash', got: %s", resBob.Occurrences[0].Definition.Name)
+	occ := resBob.Occurrences[0]
+	if !occ.ScheduledAt.Equal(occ.DueAt) {
+		t.Fatalf("expected scheduled_at == due_at, got scheduled_at=%v due_at=%v", occ.ScheduledAt, occ.DueAt)
 	}
+}
 
-	// 2. Cancel closes its step message and clears flow
-	uAdd2 := telegram.Update{
-		UpdateID: 7,
+// 5.2: Past time on today keeps flow at hour step with date kept
+func TestChoresFlow_PastTimeOnToday(t *testing.T) {
+	env, err := setupTestEnv()
+	if err != nil {
+		t.Fatalf("failed to setup test env: %v", err)
+	}
+	ctx := context.Background()
+
+	// Household time is 14:00 on Oct 5 2026
+	loc := env.clock.loc
+	env.clock.now = time.Date(2026, 10, 5, 14, 0, 0, 0, loc)
+
+	_ = env.router.HandleUpdate(ctx, telegram.Update{
+		UpdateID: 1,
 		Message: &telegram.Message{
-			MessageID:       20,
-			MessageThreadID: 51,
-			Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
-			From:            &telegram.User{ID: 101, FirstName: "Alice"},
-			Text:            "/add",
+			MessageID: 10, MessageThreadID: 51,
+			Chat: telegram.Chat{ID: -1001234567890, Type: "supergroup"},
+			From: &telegram.User{ID: 101, FirstName: "Alice"}, Text: "/add",
 		},
-	}
-	if err := env.router.HandleUpdate(ctx, uAdd2); err != nil {
-		t.Fatalf("unexpected error on second /add: %v", err)
-	}
-
-	uName2 := telegram.Update{
-		UpdateID: 8,
+	})
+	_ = env.router.HandleUpdate(ctx, telegram.Update{
+		UpdateID: 2,
 		Message: &telegram.Message{
-			MessageID:       21,
-			MessageThreadID: 51,
-			Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
-			From:            &telegram.User{ID: 101, FirstName: "Alice"},
-			Text:            "Mop floor",
+			MessageID: 11, MessageThreadID: 51,
+			Chat: telegram.Chat{ID: -1001234567890, Type: "supergroup"},
+			From: &telegram.User{ID: 101, FirstName: "Alice"}, Text: "Sweep patio",
 		},
-	}
-	if err := env.router.HandleUpdate(ctx, uName2); err != nil {
-		t.Fatalf("unexpected error on second chore name: %v", err)
-	}
-	assigneePrompt2 := env.client.LastSent()
+	})
+	_ = pressChoreCallback(ctx, env, 3, 101, "fl:usr:101")
+	_ = pressChoreCallback(ctx, env, 4, 101, "fl:rt:once")
+	_ = pressChoreCallback(ctx, env, 5, 101, "fl:d:today")
+	_ = pressChoreCallback(ctx, env, 6, 101, "fl:h:09")
 
-	uCancel := telegram.Update{
-		UpdateID: 9,
-		CallbackQuery: &telegram.CallbackQuery{
-			ID:   "cb_cancel_chores",
-			From: telegram.User{ID: 101, FirstName: "Alice"},
-			Message: &telegram.Message{
-				MessageID:       assigneePrompt2.MessageID,
-				MessageThreadID: 51,
-				Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
-				Text:            assigneePrompt2.Text,
-			},
-			Data: "fl:c",
-		},
-	}
-	if err := env.router.HandleUpdate(ctx, uCancel); err != nil {
-		t.Fatalf("unexpected error on cancel: %v", err)
-	}
-	lastEdited = env.client.LastEdited()
-	if lastEdited == nil || lastEdited.MessageID != assigneePrompt2.MessageID {
-		t.Fatalf("expected assignee step message %d to be edited on cancel, got: %+v", assigneePrompt2.MessageID, lastEdited)
-	}
-	if lastEdited.Markup == nil || len(lastEdited.Markup.InlineKeyboard) != 0 {
-		t.Fatalf("expected empty keyboard after cancel, got: %+v", lastEdited.Markup)
-	}
-	if lastEdited.Text != assigneePrompt2.Text {
-		t.Fatalf("expected assignee prompt text preserved on cancel, got: %q", lastEdited.Text)
+	// Minute 00 -> 09:00 earlier today is in the past!
+	_ = pressChoreCallback(ctx, env, 7, 101, "fl:mi:00")
+
+	// Must answer with alert that time has passed
+	lastAns := env.client.LastAnswer()
+	if lastAns == nil || !strings.Contains(lastAns.Text, "past") {
+		t.Fatalf("expected past due time alert, got: %+v", lastAns)
 	}
 
-	// Verify flow is cleared and no second chore was created
-	flowKey := flowKeyFor(101, -1001234567890, 51)
-	state, err := env.flow.Get(ctx, flowKey, nil)
-	if err == nil && state != nil {
-		t.Fatalf("expected flow to be cleared after cancel, got: %+v", state)
+	// Message stays at hour step with date kept
+	lastEdit := env.client.LastEdited()
+	if lastEdit == nil || !strings.Contains(lastEdit.Text, "hour") {
+		t.Fatalf("expected to remain on hour step, got: %+v", lastEdit)
 	}
-	resBob, _ = env.chores.ListMyOpen(ctx, 102)
-	if len(resBob.Occurrences) != 1 {
-		t.Fatalf("expected still exactly 1 chore for Bob, got: %d", len(resBob.Occurrences))
+
+	// No occurrence was created
+	res, _ := env.chores.ListMyOpen(ctx, 101)
+	if len(res.Occurrences) != 0 {
+		t.Fatalf("expected 0 occurrences after past time rejection, got: %d", len(res.Occurrences))
+	}
+
+	// Alice picks valid hour 15 and minute 00 -> proceeds
+	_ = pressChoreCallback(ctx, env, 8, 101, "fl:h:15")
+	_ = pressChoreCallback(ctx, env, 9, 101, "fl:mi:00")
+	lastEdit = env.client.LastEdited()
+	if lastEdit == nil || !strings.Contains(lastEdit.Text, "Confirm") {
+		t.Fatalf("expected confirm prompt, got: %+v", lastEdit)
+	}
+	_ = pressChoreCallback(ctx, env, 10, 101, "fl:ok")
+
+	res, err = env.chores.ListMyOpen(ctx, 101)
+	if err != nil || len(res.Occurrences) != 1 {
+		t.Fatalf("expected 1 occurrence after picking future time, got: %+v", res)
+	}
+	wantDue := time.Date(2026, 10, 5, 15, 0, 0, 0, loc).UTC()
+	if !res.Occurrences[0].DueAt.Equal(wantDue) {
+		t.Fatalf("expected due %v, got %v", wantDue, res.Occurrences[0].DueAt)
+	}
+}
+
+// 5.2: Abandoning flow creates nothing
+func TestChoresFlow_AbandonCreatesNothing(t *testing.T) {
+	env, err := setupTestEnv()
+	if err != nil {
+		t.Fatalf("failed to setup test env: %v", err)
+	}
+	ctx := context.Background()
+
+	_ = env.router.HandleUpdate(ctx, telegram.Update{
+		UpdateID: 1,
+		Message: &telegram.Message{
+			MessageID: 10, MessageThreadID: 51,
+			Chat: telegram.Chat{ID: -1001234567890, Type: "supergroup"},
+			From: &telegram.User{ID: 101, FirstName: "Alice"}, Text: "/add",
+		},
+	})
+	_ = env.router.HandleUpdate(ctx, telegram.Update{
+		UpdateID: 2,
+		Message: &telegram.Message{
+			MessageID: 11, MessageThreadID: 51,
+			Chat: telegram.Chat{ID: -1001234567890, Type: "supergroup"},
+			From: &telegram.User{ID: 101, FirstName: "Alice"}, Text: "Abandoned chore",
+		},
+	})
+
+	// Advance clock past TTL (35 min)
+	env.clock.now = env.clock.now.Add(35 * time.Minute)
+
+	// Press button after expiry -> alert and keyboard removed
+	_ = pressChoreCallback(ctx, env, 3, 101, "fl:usr:101")
+	lastAns := env.client.LastAnswer()
+	if lastAns == nil || !strings.Contains(lastAns.Text, "expired") {
+		t.Fatalf("expected expired alert, got: %+v", lastAns)
+	}
+
+	// Verify nothing was created in definitions or occurrences
+	defs, _ := env.chores.ListDefinitions(ctx)
+	if len(defs) != 0 {
+		t.Fatalf("expected 0 definitions, got %d", len(defs))
+	}
+	occs, _ := env.chores.ListMyOpen(ctx, 101)
+	if len(occs.Occurrences) != 0 {
+		t.Fatalf("expected 0 occurrences, got %d", len(occs.Occurrences))
+	}
+}
+
+// Cancel closes flow keyboard and sends cancelled notice
+func TestChoresFlow_Cancel(t *testing.T) {
+	env, err := setupTestEnv()
+	if err != nil {
+		t.Fatalf("failed to setup test env: %v", err)
+	}
+	ctx := context.Background()
+
+	_ = env.router.HandleUpdate(ctx, telegram.Update{
+		UpdateID: 1,
+		Message: &telegram.Message{
+			MessageID: 10, MessageThreadID: 51,
+			Chat: telegram.Chat{ID: -1001234567890, Type: "supergroup"},
+			From: &telegram.User{ID: 101, FirstName: "Alice"}, Text: "/add",
+		},
+	})
+	_ = pressChoreCallback(ctx, env, 2, 101, "fl:c")
+
+	lastSent := env.client.LastSent()
+	if lastSent == nil || !strings.Contains(lastSent.Text, "cancelled") {
+		t.Fatalf("expected cancelled message, got: %+v", lastSent)
+	}
+	lastEdit := env.client.LastEdited()
+	if lastEdit == nil || len(lastEdit.Markup.InlineKeyboard) != 0 {
+		t.Fatalf("expected closed keyboard on cancel, got: %+v", lastEdit)
+	}
+}
+
+// Calendar navigation changes month on the same message without advancing the step
+func TestChoresFlow_CalendarNavigation(t *testing.T) {
+	env, err := setupTestEnv()
+	if err != nil {
+		t.Fatalf("failed to setup test env: %v", err)
+	}
+	ctx := context.Background()
+
+	_ = env.router.HandleUpdate(ctx, telegram.Update{
+		UpdateID: 1,
+		Message: &telegram.Message{
+			MessageID: 10, MessageThreadID: 51,
+			Chat: telegram.Chat{ID: -1001234567890, Type: "supergroup"},
+			From: &telegram.User{ID: 101, FirstName: "Alice"}, Text: "/add",
+		},
+	})
+	_ = env.router.HandleUpdate(ctx, telegram.Update{
+		UpdateID: 2,
+		Message: &telegram.Message{
+			MessageID: 11, MessageThreadID: 51,
+			Chat: telegram.Chat{ID: -1001234567890, Type: "supergroup"},
+			From: &telegram.User{ID: 101, FirstName: "Alice"}, Text: "Nav chore",
+		},
+	})
+	_ = pressChoreCallback(ctx, env, 3, 101, "fl:usr:101")
+	_ = pressChoreCallback(ctx, env, 4, 101, "fl:rt:once")
+
+	// Current month is October 2026. Navigate to November 2026.
+	_ = pressChoreCallback(ctx, env, 5, 101, "fl:cal:2026-11")
+	lastEdit := env.client.LastEdited()
+	if lastEdit == nil || !strings.Contains(lastEdit.Markup.InlineKeyboard[0][1].Text, "November 2026") {
+		t.Fatalf("expected November 2026 header, got: %+v", lastEdit)
+	}
+
+	// Press fl:noop (e.g. past day or header) -> inert, no edit
+	editsBefore := len(env.client.EditedMessages())
+	_ = pressChoreCallback(ctx, env, 6, 101, "fl:noop")
+	if len(env.client.EditedMessages()) != editsBefore {
+		t.Fatalf("expected no edit on fl:noop")
 	}
 }

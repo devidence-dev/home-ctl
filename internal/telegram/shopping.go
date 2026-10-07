@@ -37,17 +37,14 @@ func (r *Router) handleShoppingAdd(ctx context.Context, member *household.Member
 	if len(items) == 0 {
 		// No items in catalog, immediately ask for new item name
 		_ = r.flow.Set(ctx, flowKey, "shopping_new_name", shoppingNewItemPayload{}, r.cfg.FlowTTL)
+		st, _ := r.flow.Get(ctx, flowKey, nil)
 		text := r.i18n.T(locale, "shopping.prompt_new_item_name")
 		markup := &InlineKeyboardMarkup{
 			InlineKeyboard: [][]InlineKeyboardButton{
 				{{Text: r.i18n.T(locale, "buttons.cancel"), CallbackData: "fl:c"}},
 			},
 		}
-		_, err := r.client.SendMessage(ctx, msg.Chat.ID, text, &SendOptions{
-			ThreadID:    msg.MessageThreadID,
-			ReplyMarkup: markup,
-		})
-		return err
+		return r.showFlowMessage(ctx, st, text, markup, true)
 	}
 
 	// Catalog has items: show selectable items plus Add new item and Cancel
@@ -75,11 +72,8 @@ func (r *Router) handleShoppingAdd(ctx context.Context, member *household.Member
 	})
 
 	text := r.i18n.T(locale, "shopping.prompt_select")
-	_, err = r.client.SendMessage(ctx, msg.Chat.ID, text, &SendOptions{
-		ThreadID:    msg.MessageThreadID,
-		ReplyMarkup: &InlineKeyboardMarkup{InlineKeyboard: rows},
-	})
-	return err
+	st, _ := r.flow.Get(ctx, flowKey, nil)
+	return r.showFlowMessage(ctx, st, text, &InlineKeyboardMarkup{InlineKeyboard: rows}, true)
 }
 
 func (r *Router) handleShoppingList(ctx context.Context, member *household.Member, msg *Message) error {
@@ -200,17 +194,14 @@ func (r *Router) handleShoppingFlowText(ctx context.Context, member *household.M
 		}
 		payload := shoppingNewItemPayload{Name: text}
 		_ = r.flow.Set(ctx, flowKey, "shopping_new_emoji", payload, r.cfg.FlowTTL)
+		st, _ := r.flow.Get(ctx, flowKey, nil)
 		prompt := r.i18n.T(locale, "shopping.prompt_new_item_emoji")
 		markup := &InlineKeyboardMarkup{
 			InlineKeyboard: [][]InlineKeyboardButton{
 				{{Text: r.i18n.T(locale, "buttons.cancel"), CallbackData: "fl:c"}},
 			},
 		}
-		_, err := r.client.SendMessage(ctx, msg.Chat.ID, prompt, &SendOptions{
-			ThreadID:    msg.MessageThreadID,
-			ReplyMarkup: markup,
-		})
-		return err
+		return r.showFlowMessage(ctx, st, prompt, markup, true)
 
 	case "shopping_new_emoji":
 		var payload shoppingNewItemPayload
@@ -260,6 +251,7 @@ func (r *Router) handleShoppingFlowCallback(ctx context.Context, member *househo
 
 	case CallbackFlowNewItem:
 		_ = r.flow.Set(ctx, flowKey, "shopping_new_name", shoppingNewItemPayload{}, r.cfg.FlowTTL)
+		st, _ := r.flow.Get(ctx, flowKey, nil)
 		_ = r.client.AnswerCallbackQuery(ctx, cq.ID, "", false)
 		prompt := r.i18n.T(locale, "shopping.prompt_new_item_name")
 		markup := &InlineKeyboardMarkup{
@@ -267,11 +259,7 @@ func (r *Router) handleShoppingFlowCallback(ctx context.Context, member *househo
 				{{Text: r.i18n.T(locale, "buttons.cancel"), CallbackData: "fl:c"}},
 			},
 		}
-		_, err := r.client.SendMessage(ctx, cq.Message.Chat.ID, prompt, &SendOptions{
-			ThreadID:    cq.Message.MessageThreadID,
-			ReplyMarkup: markup,
-		})
-		return err
+		return r.showFlowMessage(ctx, st, prompt, markup, true)
 
 	case CallbackFlowSelect:
 		// User selected item to add to pending list

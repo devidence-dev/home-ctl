@@ -39,6 +39,28 @@ func (f *fakeFlowStore) Get(_ context.Context, key flow.Key, now time.Time) (*fl
 	return st, nil
 }
 
+func (f *fakeFlowStore) SetMessageID(_ context.Context, key flow.Key, messageID int64) error {
+	st, ok := f.states[key]
+	if !ok {
+		return flow.ErrNoFlow
+	}
+	st.MessageID = messageID
+	return nil
+}
+
+func (f *fakeFlowStore) GetByMessage(_ context.Context, chatID int64, threadID int64, messageID int64, now time.Time) (*flow.State, error) {
+	for k, st := range f.states {
+		if k.ChatID == chatID && k.ThreadID == threadID && st.MessageID == messageID && messageID != 0 {
+			if now.After(st.ExpiresAt) {
+				delete(f.states, k)
+				return nil, flow.ErrFlowExpired
+			}
+			return st, nil
+		}
+	}
+	return nil, flow.ErrNoFlow
+}
+
 func (f *fakeFlowStore) Delete(_ context.Context, key flow.Key) error {
 	delete(f.states, key)
 	return nil
@@ -116,5 +138,28 @@ func TestFlowManager(t *testing.T) {
 	purged, err := mgr.Purge(ctx)
 	if err != nil || purged != 1 {
 		t.Fatalf("Purge failed: %v, count=%d", err, purged)
+	}
+
+	// 6. SetMessageID and GetByMessage
+	keyMsg := flow.Key{UserID: 2001, ChatID: -200, ThreadID: 10}
+	if err := mgr.Set(ctx, keyMsg, "step_msg", payload, 10*time.Minute); err != nil {
+		t.Fatalf("Set failed: %v", err)
+	}
+	if err := mgr.SetMessageID(ctx, keyMsg, 9999); err != nil {
+		t.Fatalf("SetMessageID failed: %v", err)
+	}
+	var msgPayload samplePayload
+	stByMsg, err := mgr.GetByMessage(ctx, -200, 10, 9999, &msgPayload)
+	if err != nil {
+		t.Fatalf("GetByMessage failed: %v", err)
+	}
+	if stByMsg.Key.UserID != 2001 || stByMsg.MessageID != 9999 || msgPayload.Note != "eggs" {
+		t.Fatalf("unexpected state by message: %+v", stByMsg)
+	}
+
+	// Non-existent message
+	_, err = mgr.GetByMessage(ctx, -200, 10, 8888, nil)
+	if !errors.Is(err, flow.ErrNoFlow) {
+		t.Fatalf("expected ErrNoFlow, got %v", err)
 	}
 }

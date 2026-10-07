@@ -28,6 +28,7 @@ type State struct {
 	Step      string    `json:"step"`
 	Payload   []byte    `json:"payload"`
 	ExpiresAt time.Time `json:"expires_at"`
+	MessageID int64     `json:"message_id,omitempty"`
 }
 
 // Clock provides current time.
@@ -38,7 +39,9 @@ type Clock interface {
 // Store persists and retrieves flow states.
 type Store interface {
 	Set(ctx context.Context, key Key, step string, payload []byte, expiresAt time.Time) error
+	SetMessageID(ctx context.Context, key Key, messageID int64) error
 	Get(ctx context.Context, key Key, now time.Time) (*State, error)
+	GetByMessage(ctx context.Context, chatID int64, threadID int64, messageID int64, now time.Time) (*State, error)
 	Delete(ctx context.Context, key Key) error
 	PurgeExpired(ctx context.Context, now time.Time) (int64, error)
 }
@@ -74,10 +77,32 @@ func (m *Manager) Set(ctx context.Context, key Key, step string, payload interfa
 	return m.store.Set(ctx, key, step, data, expiresAt)
 }
 
+// SetMessageID sets the active bot message id for this flow.
+func (m *Manager) SetMessageID(ctx context.Context, key Key, messageID int64) error {
+	return m.store.SetMessageID(ctx, key, messageID)
+}
+
 // Get retrieves active state and unmarshals payload into target.
 func (m *Manager) Get(ctx context.Context, key Key, target interface{}) (*State, error) {
 	now := m.clock.Now().UTC()
 	st, err := m.store.Get(ctx, key, now)
+	if err != nil {
+		return nil, err
+	}
+
+	if target != nil && len(st.Payload) > 0 {
+		if err := json.Unmarshal(st.Payload, target); err != nil {
+			return nil, err
+		}
+	}
+
+	return st, nil
+}
+
+// GetByMessage retrieves active state by message ID and unmarshals payload into target.
+func (m *Manager) GetByMessage(ctx context.Context, chatID int64, threadID int64, messageID int64, target interface{}) (*State, error) {
+	now := m.clock.Now().UTC()
+	st, err := m.store.GetByMessage(ctx, chatID, threadID, messageID, now)
 	if err != nil {
 		return nil, err
 	}
