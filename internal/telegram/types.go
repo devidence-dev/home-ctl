@@ -64,3 +64,15 @@ type EditOptions struct {
 	ReplyMarkup *InlineKeyboardMarkup
 	ParseMode   string
 }
+
+// BotCommand represents a bot command.
+type BotCommand struct {
+	Command     string `json:"command"`
+	Description string `json:"description"`
+}
+
+// BotCommandScope represents the scope to which bot commands are applied.
+type BotCommandScope struct {
+	Type   string `json:"type"`
+	ChatID int64  `json:"chat_id,omitempty"`
+}

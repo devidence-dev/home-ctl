@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -38,6 +39,11 @@ var DefaultRequiredKeys = []string{
 	"datetime.full_year",
 	"datetime.today",
 	"datetime.tomorrow",
+	"telegram.commands.add.description",
+	"telegram.commands.list.description",
+	"telegram.commands.status.description",
+	"telegram.commands.help.description",
+	"telegram.commands.start.description",
 }
 
 // Bundle holds loaded translations keyed by locale and dot-notated string paths.
@@ -107,6 +113,16 @@ func NewBundle(localesDir, defaultLocale string, requiredKeys []string, logger *
 		defaultLocale: defaultLocale,
 		logger:        logger,
 	}, nil
+}
+
+// Locales returns the sorted list of loaded locale identifiers.
+func (b *Bundle) Locales() []string {
+	names := make([]string, 0, len(b.locales))
+	for name := range b.locales {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // T translates a key into the specified locale with fallback to defaultLocale and English.

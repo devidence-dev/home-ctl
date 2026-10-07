@@ -35,7 +35,7 @@ go.work.sum
 # .vscode/
 
 # Application binaries and SQLite data
-homectl
+/homectl
 *.db
 *.db-wal
 *.db-shm

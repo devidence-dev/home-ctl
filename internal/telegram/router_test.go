@@ -2,11 +2,13 @@ package telegram_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/px1/home-ctl/internal/flow"
 	"github.com/px1/home-ctl/internal/telegram"
 )
 
@@ -100,6 +102,26 @@ func TestRouter_UnmappedTopic(t *testing.T) {
 	if last == nil || !strings.Contains(last.Text, "not configured") {
 		t.Fatalf("expected unmapped topic notice, got: %+v", last)
 	}
+
+	// /list in unmapped topic also returns unmapped topic notice
+	uList := telegram.Update{
+		UpdateID: 2,
+		Message: &telegram.Message{
+			MessageID:       21,
+			MessageThreadID: 999, // Unmapped topic
+			Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
+			From:            &telegram.User{ID: 101, FirstName: "Alice"},
+			Text:            "/list",
+		},
+	}
+	if err := env.router.HandleUpdate(ctx, uList); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	last = env.client.LastSent()
+	expectedNotice := env.i18n.T("en", "general.unmapped_topic")
+	if last == nil || last.Text != expectedNotice {
+		t.Fatalf("expected unmapped topic notice %q for /list, got: %+v", expectedNotice, last)
+	}
 }
 
 func TestRouter_WrongChat(t *testing.T) {
@@ -156,6 +178,10 @@ func TestRouter_UnauthorizedUser(t *testing.T) {
 	}
 	if len(env.client.sentMessages) != sentBefore {
 		t.Errorf("expected unauthorized group message to produce no output")
+	}
+	_, err = env.flow.Get(ctx, flow.Key{UserID: 555000111, ChatID: -1001234567890, ThreadID: 42}, nil)
+	if !errors.Is(err, flow.ErrNoFlow) {
+		t.Errorf("expected no flow created for unauthorized user, got %v", err)
 	}
 
 	// Unauthorized user sends /start in private chat -> gets not configured reply
@@ -275,5 +301,60 @@ func TestRouter_ForwardedButtonActor(t *testing.T) {
 	freshOcc, err := env.chores.GetOccurrence(ctx, occ.ID)
 	if err != nil || freshOcc.Status != "open" {
 		t.Fatalf("occurrence should still be open, got: %+v", freshOcc)
+	}
+}
+
+func TestRouter_MenuGrantsNoAuthorization(t *testing.T) {
+	// Verifies that advertised menu commands do not grant authorization.
+	// Non-member /add is rejected with no flow started, and /list in unmapped topic
+	// returns general.unmapped_topic, even without any command registration having run.
+	env, err := setupTestEnv()
+	if err != nil {
+		t.Fatalf("failed to setup test env: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// 1. Non-member sends /add in group
+	uNonMember := telegram.Update{
+		UpdateID: 1,
+		Message: &telegram.Message{
+			MessageID:       100,
+			MessageThreadID: 42,
+			Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
+			From:            &telegram.User{ID: 555000111, FirstName: "NonMember"},
+			Text:            "/add",
+		},
+	}
+	sentBefore := len(env.client.sentMessages)
+	if err := env.router.HandleUpdate(ctx, uNonMember); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(env.client.sentMessages) != sentBefore {
+		t.Errorf("expected no messages sent to non-member, got %d", len(env.client.sentMessages)-sentBefore)
+	}
+	_, err = env.flow.Get(ctx, flow.Key{UserID: 555000111, ChatID: -1001234567890, ThreadID: 42}, nil)
+	if !errors.Is(err, flow.ErrNoFlow) {
+		t.Errorf("expected no flow created for non-member, got %v", err)
+	}
+
+	// 2. Member sends /list in an unmapped topic
+	uUnmappedList := telegram.Update{
+		UpdateID: 2,
+		Message: &telegram.Message{
+			MessageID:       101,
+			MessageThreadID: 8888, // Unmapped topic
+			Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
+			From:            &telegram.User{ID: 101, FirstName: "Alice"},
+			Text:            "/list",
+		},
+	}
+	if err := env.router.HandleUpdate(ctx, uUnmappedList); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	last := env.client.LastSent()
+	expectedNotice := env.i18n.T("en", "general.unmapped_topic")
+	if last == nil || last.Text != expectedNotice {
+		t.Fatalf("expected unmapped topic notice %q for /list, got: %+v", expectedNotice, last)
 	}
 }

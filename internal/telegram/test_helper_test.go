@@ -37,12 +37,20 @@ type callbackAnswer struct {
 	Alert   bool
 }
 
+type setMyCommandsCall struct {
+	Scope        telegram.BotCommandScope
+	LanguageCode string
+	Commands     []telegram.BotCommand
+}
+
 type fakeClient struct {
-	mu              sync.Mutex
-	nextMsgID       int64
-	sentMessages    []sentMessage
-	editedMessages  []editedMessage
-	callbackAnswers []callbackAnswer
+	mu                 sync.Mutex
+	nextMsgID          int64
+	sentMessages       []sentMessage
+	editedMessages     []editedMessage
+	callbackAnswers    []callbackAnswer
+	setMyCommandsCalls []setMyCommandsCall
+	onSetMyCommands    func(scope telegram.BotCommandScope, lang string, cmds []telegram.BotCommand) error
 }
 
 func newFakeClient() *fakeClient {
@@ -97,6 +105,20 @@ func (f *fakeClient) AnswerCallbackQuery(_ context.Context, callbackQueryID stri
 
 func (f *fakeClient) GetUpdates(_ context.Context, _ int64, _ int) ([]telegram.Update, error) {
 	return nil, nil
+}
+
+func (f *fakeClient) SetMyCommands(_ context.Context, scope telegram.BotCommandScope, languageCode string, commands []telegram.BotCommand) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.setMyCommandsCalls = append(f.setMyCommandsCalls, setMyCommandsCall{
+		Scope:        scope,
+		LanguageCode: languageCode,
+		Commands:     commands,
+	})
+	if f.onSetMyCommands != nil {
+		return f.onSetMyCommands(scope, languageCode, commands)
+	}
+	return nil
 }
 
 func (f *fakeClient) LastSent() *sentMessage {

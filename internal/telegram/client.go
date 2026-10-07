@@ -15,6 +15,7 @@ type Client interface {
 	EditMessageText(ctx context.Context, chatID int64, messageID int64, text string, opts *EditOptions) error
 	AnswerCallbackQuery(ctx context.Context, callbackQueryID string, text string, showAlert bool) error
 	GetUpdates(ctx context.Context, offset int64, timeout int) ([]Update, error)
+	SetMyCommands(ctx context.Context, scope BotCommandScope, languageCode string, commands []BotCommand) error
 }
 
 // HTTPClient implements Client using raw net/http.
@@ -148,4 +149,16 @@ func (c *HTTPClient) GetUpdates(ctx context.Context, offset int64, timeout int) 
 		return nil, err
 	}
 	return updates, nil
+}
+
+// SetMyCommands changes the list of the bot's commands for the given scope and user language.
+func (c *HTTPClient) SetMyCommands(ctx context.Context, scope BotCommandScope, languageCode string, commands []BotCommand) error {
+	req := map[string]interface{}{
+		"commands": commands,
+		"scope":    scope,
+	}
+	if languageCode != "" {
+		req["language_code"] = languageCode
+	}
+	return c.call(ctx, "setMyCommands", req, nil)
 }

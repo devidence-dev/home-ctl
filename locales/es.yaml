@@ -122,3 +122,16 @@ datetime:
   full_year: "%[1]s %[2]d %[3]s %[6]d, %02[4]d:%02[5]d"
   today: "hoy a las %s"
   tomorrow: "mañana a las %s"
+
+telegram:
+  commands:
+    add:
+      description: "Agregar un artículo, tarea o recordatorio"
+    list:
+      description: "Ver artículos, tareas o recordatorios"
+    status:
+      description: "Mostrar el estado de los miembros del hogar"
+    help:
+      description: "Mostrar ayuda y uso del bot"
+    start:
+      description: "Iniciar el bot y conectar notificaciones"

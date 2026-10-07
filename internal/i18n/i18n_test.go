@@ -104,16 +104,27 @@ func TestShippedLocalesAreInSync(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read %s: %v", name, err)
 		}
-		var nested map[string]map[string]string
-		if err := yaml.Unmarshal(raw, &nested); err != nil {
+		var parsed map[string]interface{}
+		if err := yaml.Unmarshal(raw, &parsed); err != nil {
 			t.Fatalf("parse %s: %v", name, err)
 		}
 		flat := map[string]string{}
-		for section, entries := range nested {
-			for key, text := range entries {
-				flat[section+"."+key] = text
+		var flatten func(prefix string, m map[string]interface{})
+		flatten = func(prefix string, m map[string]interface{}) {
+			for k, v := range m {
+				p := k
+				if prefix != "" {
+					p = prefix + "." + k
+				}
+				switch val := v.(type) {
+				case map[string]interface{}:
+					flatten(p, val)
+				case string:
+					flat[p] = val
+				}
 			}
 		}
+		flatten("", parsed)
 		return flat
 	}
 	verbs := func(s string) string {
@@ -192,5 +203,38 @@ datetime:
 	at := time.Date(2026, time.October, 10, 10, 5, 0, 0, time.UTC)
 	if got, want := b.FormatDateTime("en", at, now, time.UTC), "Sat 10 Oct 10:05"; got != want {
 		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestBundle_Locales(t *testing.T) {
+	b, err := i18n.NewBundle(filepath.Join("..", "..", "locales"), "en", i18n.DefaultRequiredKeys, nil)
+	if err != nil {
+		t.Fatalf("NewBundle failed: %v", err)
+	}
+	locales := b.Locales()
+	if len(locales) != 2 || locales[0] != "en" || locales[1] != "es" {
+		t.Fatalf("expected [en es], got %v", locales)
+	}
+}
+
+func TestBundle_MissingCommandKeyFailsStartup(t *testing.T) {
+	tempDir := t.TempDir()
+	enContent := `
+buttons:
+  done: "Done"
+`
+	writeTempLocale(t, tempDir, "en.yaml", enContent)
+	_, err := i18n.NewBundle(tempDir, "en", i18n.DefaultRequiredKeys, nil)
+	if err == nil {
+		t.Fatalf("expected error for missing required keys, got nil")
+	}
+
+	badKeys := []string{"telegram.commands.add.description"}
+	_, err = i18n.NewBundle(tempDir, "en", badKeys, nil)
+	if err == nil {
+		t.Fatalf("expected error for missing telegram.commands.add.description, got nil")
+	}
+	if !strings.Contains(err.Error(), "telegram.commands.add.description") {
+		t.Fatalf("expected error naming missing key, got %v", err)
 	}
 }
