@@ -101,6 +101,17 @@ func TestPrivateList_NavigationAndActions(t *testing.T) {
 	if edited == nil || !strings.Contains(edited.Text, "Clean bathroom") {
 		t.Fatalf("expected detail view text, got: %+v", edited)
 	}
+	// The item's own emoji is the only one before its name: no default broom in front of it.
+	if !strings.HasPrefix(edited.Text, "🚿 Clean bathroom\n") || strings.Contains(edited.Text, "🧹") {
+		t.Fatalf("expected detail title with only the item emoji, got: %q", edited.Text)
+	}
+	for _, row := range edited.Markup.InlineKeyboard {
+		for _, btn := range row {
+			if btn.Text == "Done" || btn.Text == "Postpone" || btn.Text == "Back" {
+				t.Fatalf("expected detail buttons with icons, got %q", btn.Text)
+			}
+		}
+	}
 	if len(edited.Markup.InlineKeyboard) != 2 { // Row 1: Done/Postpone, Row 2: Back
 		t.Fatalf("expected detail buttons, got: %+v", edited.Markup)
 	}
@@ -311,6 +322,9 @@ func TestPrivateList_RemindersNavigationAndActions(t *testing.T) {
 	edited := env.client.LastEdited()
 	if edited == nil || !strings.Contains(edited.Text, "Call doctor") {
 		t.Fatalf("expected detail view text, got: %+v", edited)
+	}
+	if !strings.HasPrefix(edited.Text, "⏰ Call doctor\n") || strings.Count(edited.Text, "⏰") != 1 {
+		t.Fatalf("expected reminder detail title with its emoji once, got: %q", edited.Text)
 	}
 
 	// 4. Back navigation: Bob taps Back ("list:re")
