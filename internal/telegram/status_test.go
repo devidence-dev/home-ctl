@@ -57,7 +57,7 @@ func TestStatus_StartHelpAndStatus(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	last = env.client.LastSent()
-	if last == nil || !strings.Contains(last.Text, "Household Members Status") {
+	if last == nil || !strings.Contains(last.Text, "🏠 Household members") {
 		t.Fatalf("expected status header, got: %+v", last)
 	}
 	if !strings.Contains(last.Text, "Alice — connected") || !strings.Contains(last.Text, "Bob — connected") {
@@ -135,5 +135,53 @@ func TestNotifier_SendPrivateAndGroup(t *testing.T) {
 	last = env.client.LastSent()
 	if last == nil || last.Text != "Group message" || last.ThreadID != 51 {
 		t.Fatalf("expected group update sent to thread 51, got: %+v", last)
+	}
+}
+
+func TestStatus_MixedStateInEnglishAndSpanish(t *testing.T) {
+	env, err := setupTestEnv()
+	if err != nil {
+		t.Fatalf("failed to setup test env: %v", err)
+	}
+	ctx := context.Background()
+
+	// Alice (en) asks in the group; Charlie (es) is still pending.
+	statusFrom := func(userID int64) {
+		t.Helper()
+		err := env.router.HandleUpdate(ctx, telegram.Update{Message: &telegram.Message{
+			MessageID:       20,
+			MessageThreadID: 42,
+			Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
+			From:            &telegram.User{ID: userID, FirstName: "Someone"},
+			Text:            "/status",
+		}})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+
+	statusFrom(101)
+	en := env.client.LastSent()
+	for _, want := range []string{
+		"🏠 Household members",
+		"✅ Alice — connected",
+		"✅ Bob — connected",
+		"⏳ Charlie — pending: open the bot and tap Start",
+	} {
+		if !strings.Contains(en.Text, want) {
+			t.Errorf("English status missing %q, got:\n%s", want, en.Text)
+		}
+	}
+
+	statusFrom(103)
+	es := env.client.LastSent()
+	for _, want := range []string{
+		"🏠 Miembros del hogar",
+		"✅ Alice — conectado",
+		"⏳ Charlie — pendiente: abre el bot y toca Iniciar",
+	} {
+		if !strings.Contains(es.Text, want) {
+			t.Errorf("Spanish status missing %q, got:\n%s", want, es.Text)
+		}
 	}
 }

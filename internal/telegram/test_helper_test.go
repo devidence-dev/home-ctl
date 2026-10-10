@@ -165,6 +165,10 @@ func (f *fakeClient) SetMyCommands(_ context.Context, scope telegram.BotCommandS
 	return nil
 }
 
+func (f *fakeClient) GetMe(_ context.Context) (telegram.User, error) {
+	return telegram.User{ID: 999000, FirstName: "home-ctl", Username: "home_ctl_bot"}, nil
+}
+
 func (f *fakeClient) LastSent() *sentMessage {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -297,6 +301,7 @@ func setupTestEnv() (*testEnv, error) {
 		RemindersTopicID: 63,
 		DefaultLocale:    "en",
 		FlowTTL:          30 * time.Minute,
+		BotUsername:      "home_ctl_bot",
 	}
 
 	router := telegram.NewRouter(cfg, client, hhSvc, shSvc, chSvc, reSvc, flMgr, bundle, clock, nil)

@@ -431,6 +431,10 @@ func (f *fakeClientForPolling) SetMyCommands(_ context.Context, _ telegram.BotCo
 	return nil
 }
 
+func (f *fakeClientForPolling) GetMe(_ context.Context) (telegram.User, error) {
+	return telegram.User{}, nil
+}
+
 func TestDispatcher_PollOnce(t *testing.T) {
 	store := newMockUpdateStore()
 	var handled []int64
@@ -488,5 +492,60 @@ func TestDispatcher_Start_Cancel(t *testing.T) {
 	err := disp.Start(ctx)
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("expected context.Canceled, got %v", err)
+	}
+}
+
+func TestHTTPClient_GetMe(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/getMe" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok": true,
+			"result": map[string]interface{}{
+				"id": 999, "is_bot": true, "first_name": "home-ctl", "username": "home_ctl_bot",
+			},
+		})
+	}))
+	defer server.Close()
+
+	me, err := telegram.NewHTTPClientWithBaseURL(server.URL).GetMe(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if me.ID != 999 || me.Username != "home_ctl_bot" {
+		t.Errorf("unexpected bot user: %+v", me)
+	}
+}
+
+func TestHTTPClient_SendMessageURLButton(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("failed to decode request body: %v", err)
+		}
+		markup := req["reply_markup"].(map[string]interface{})
+		row := markup["inline_keyboard"].([]interface{})[0].([]interface{})
+		btn := row[0].(map[string]interface{})
+		if btn["url"] != "https://t.me/home_ctl_bot?start=connect" {
+			t.Errorf("expected url button, got %v", btn)
+		}
+		if _, ok := btn["callback_data"]; ok {
+			t.Errorf("url button must not carry callback_data: %v", btn)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok":     true,
+			"result": map[string]interface{}{"message_id": 1},
+		})
+	}))
+	defer server.Close()
+
+	_, err := telegram.NewHTTPClientWithBaseURL(server.URL).SendMessage(context.Background(), 1, "hi", &telegram.SendOptions{
+		ReplyMarkup: &telegram.InlineKeyboardMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{{
+			{Text: "🔗 Connect", URL: "https://t.me/home_ctl_bot?start=connect"},
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

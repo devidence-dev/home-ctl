@@ -30,6 +30,8 @@ type RouterConfig struct {
 	FlowTTL          time.Duration
 	// DefaultTimeOfDay ("HH:MM") is the time used for date-only choices such as "Tomorrow".
 	DefaultTimeOfDay string
+	// BotUsername builds the connect deep link; empty when it could not be read at startup.
+	BotUsername string
 }
 
 // Router dispatches incoming Telegram updates to domain handlers.
@@ -130,6 +132,9 @@ func (r *Router) handleMessage(ctx context.Context, msg *Message) error {
 		r.logger.Debug("ignoring message from unauthorized user", "user_id", userID)
 		return nil
 	}
+	if isPrivate {
+		r.recordOnboarding(ctx, userID)
+	}
 
 	locale := member.Locale
 	if locale == "" {
@@ -212,6 +217,14 @@ func (r *Router) handleMessage(ctx context.Context, msg *Message) error {
 	return nil
 }
 
+// recordOnboarding connects an authorized member after any private interaction: a private message
+// or button press proves the bot can write to them. Failures are logged; they never block the reply.
+func (r *Router) recordOnboarding(ctx context.Context, userID int64) {
+	if err := r.household.EnsureConnected(ctx, userID, r.clock.Now().UTC()); err != nil {
+		r.logger.Error("failed to record onboarding", "user_id", userID, "err", err)
+	}
+}
+
 func (r *Router) handleCallbackQuery(ctx context.Context, cq *CallbackQuery) error {
 	actorID := cq.From.ID // ALWAYS cq.From.ID!
 	if cq.Message != nil {
@@ -226,6 +239,9 @@ func (r *Router) handleCallbackQuery(ctx context.Context, cq *CallbackQuery) err
 	if err != nil {
 		_ = r.client.AnswerCallbackQuery(ctx, cq.ID, r.i18n.T(r.cfg.DefaultLocale, "general.not_member"), true)
 		return nil
+	}
+	if cq.Message != nil && cq.Message.Chat.Type == "private" {
+		r.recordOnboarding(ctx, actorID)
 	}
 
 	parsed, err := ParseCallbackData(cq.Data, actorID)
@@ -246,7 +262,8 @@ func (r *Router) handleCallbackQuery(ctx context.Context, cq *CallbackQuery) err
 		return r.handleReminderCallback(ctx, member, cq, parsed)
 
 	case CallbackFlowCancel, CallbackFlowConfirm, CallbackFlowSelect, CallbackFlowUser, CallbackFlowDue, CallbackFlowRecurrence, CallbackFlowAnchor, CallbackFlowNewItem,
-		CallbackFlowNoop, CallbackFlowRecurrenceType, CallbackFlowInterval, CallbackFlowCalendar, CallbackFlowDate, CallbackFlowHour, CallbackFlowMinute:
+		CallbackFlowNoop, CallbackFlowRecurrenceType, CallbackFlowInterval, CallbackFlowCalendar, CallbackFlowDate, CallbackFlowHour, CallbackFlowMinute,
+		CallbackFlowEmoji:
 		return r.handleFlowCallback(ctx, member, cq, parsed)
 
 	default:

@@ -136,23 +136,29 @@ func TestHouseholdService(t *testing.T) {
 		t.Fatalf("expected ErrNotMember for unknown user, got %v", err)
 	}
 
-	// 3. HandlePrivateStart
-	// Non-member sends /start
-	_, err = svc.HandlePrivateStart(ctx, 9999, time.Now())
-	if !errors.Is(err, household.ErrNotMember) {
-		t.Fatalf("expected ErrNotMember for unknown user /start, got %v", err)
+	// 3. EnsureConnected
+	// Non-member private activity is rejected and records nothing
+	if err := svc.EnsureConnected(ctx, 9999, time.Now()); !errors.Is(err, household.ErrNotMember) {
+		t.Fatalf("expected ErrNotMember for unknown user, got %v", err)
+	}
+	if conn, _ := svc.IsConnected(ctx, 9999); conn {
+		t.Fatalf("non-member must not be recorded as connected")
 	}
 
-	// Alice sends /start
-	m, err := svc.HandlePrivateStart(ctx, 1001, time.Now())
-	if err != nil || m.ID != 1001 {
-		t.Fatalf("Alice /start failed: %v", err)
+	// Alice's first private activity connects her and keeps that timestamp
+	first := time.Date(2026, 10, 9, 23, 10, 0, 0, time.UTC)
+	if err := svc.EnsureConnected(ctx, 1001, first); err != nil {
+		t.Fatalf("Alice EnsureConnected failed: %v", err)
 	}
-
-	// Alice is now connected
 	conn, err := svc.IsConnected(ctx, 1001)
 	if err != nil || !conn {
 		t.Fatalf("expected Alice connected, got %v, err=%v", conn, err)
+	}
+	if err := svc.EnsureConnected(ctx, 1001, first.Add(time.Hour)); err != nil {
+		t.Fatalf("repeated EnsureConnected failed: %v", err)
+	}
+	if got := store.onboarding[1001].ConnectedAt; got == nil || !got.Equal(first) {
+		t.Fatalf("expected first connection timestamp %v kept, got %v", first, got)
 	}
 
 	// Bob is not connected

@@ -54,6 +54,12 @@ func (r *Router) handleRemindersAdd(ctx context.Context, member *household.Membe
 	return r.showFlowMessage(ctx, st, prompt, r.cancelOnlyMarkup(locale), true)
 }
 
+func (r *Router) promptReminderEmoji(ctx context.Context, state *flow.State, locale string, payload reminderFlowPayload) error {
+	suggestions := EmojiSuggestions(r.i18n, locale, "picker.emoji_suggestions_reminders")
+	prompt, markup := RenderEmojiStep(r.i18n, locale, suggestions)
+	return r.showFlowMessage(ctx, state, r.flowStepText(locale, reminderContext(payload), prompt), markup)
+}
+
 func (r *Router) promptReminderTarget(ctx context.Context, state *flow.State, locale string, payload reminderFlowPayload) error {
 	members, err := r.household.ListActiveMembers(ctx)
 	if err != nil {
@@ -167,7 +173,18 @@ func (r *Router) handleRemindersFlowText(ctx context.Context, member *household.
 			return nil
 		}
 		payload.Title = text
-		payload.Emoji = "⏰"
+		_ = r.flow.Set(ctx, flowKey, "reminder_emoji", payload, r.cfg.FlowTTL)
+		return r.reanchorFlow(ctx, state, func() error {
+			return r.promptReminderEmoji(ctx, state, locale, payload)
+		})
+
+	case "reminder_typed_emoji":
+		emoji, err := ValidateTypedEmoji(text)
+		if err != nil {
+			return r.reanchorRejected(ctx, state, locale, reminderContext(payload),
+				r.i18n.T(locale, "picker.invalid_emoji"), r.i18n.T(locale, "picker.prompt_type_emoji"))
+		}
+		payload.Emoji = emoji
 		_ = r.flow.Set(ctx, flowKey, "reminder_target", payload, r.cfg.FlowTTL)
 		return r.reanchorFlow(ctx, state, func() error {
 			return r.promptReminderTarget(ctx, state, locale, payload)
@@ -278,6 +295,26 @@ func (r *Router) handleRemindersFlowCallback(ctx context.Context, member *househ
 			ThreadID: threadID,
 		})
 		return err
+
+	case CallbackFlowEmoji:
+		_ = r.client.AnswerCallbackQuery(ctx, cq.ID, "", false)
+		switch parsed.Payload {
+		case "o":
+			_ = r.flow.Set(ctx, flowKey, "reminder_typed_emoji", payload, r.cfg.FlowTTL)
+			prompt := r.i18n.T(locale, "picker.prompt_type_emoji")
+			return r.showFlowMessage(ctx, state, r.flowStepText(locale, reminderContext(payload), prompt), r.cancelOnlyMarkup(locale))
+		case "skip":
+			payload.Emoji = "⏰"
+		default:
+			suggestions := EmojiSuggestions(r.i18n, locale, "picker.emoji_suggestions_reminders")
+			if int(parsed.TargetID) >= len(suggestions) {
+				// Out-of-range index: nothing changes, the step stays as it is.
+				return nil
+			}
+			payload.Emoji = suggestions[parsed.TargetID]
+		}
+		_ = r.flow.Set(ctx, flowKey, "reminder_target", payload, r.cfg.FlowTTL)
+		return r.promptReminderTarget(ctx, state, locale, payload)
 
 	case CallbackFlowUser:
 		payload.TargetUserID = parsed.TargetID

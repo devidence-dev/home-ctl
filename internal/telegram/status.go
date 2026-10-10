@@ -9,11 +9,6 @@ import (
 )
 
 func (r *Router) handleStart(ctx context.Context, member *household.Member, msg *Message) error {
-	now := r.clock.Now().UTC()
-	if _, err := r.household.HandlePrivateStart(ctx, member.ID, now); err != nil {
-		r.logger.Error("failed to record onboarding", "user_id", member.ID, "err", err)
-	}
-
 	locale := member.Locale
 	if locale == "" {
 		locale = r.cfg.DefaultLocale

@@ -86,9 +86,12 @@ reminders:
   prompt_anchor: "Elige el ancla de recurrencia para '%s':"
 
 lists:
-  due: "📅 %s"
-  due_recurring: "📅 %s · 🔁 %s"
-  overdue: "⚠️ Venció: %s"
+  group_overdue: "🔴 Vencidas"
+  group_today: "🟡 Hoy"
+  group_tomorrow: "🟢 Mañana"
+  group_upcoming: "⚪ Próximas"
+  entry_detail: "╰┈➤ %s"
+  entry_recurrence: "%s · 🔁 %s"
   view_chores: "🧹 Tareas"
   view_reminders: "⏰ Recordatorios"
 
@@ -97,6 +100,7 @@ general:
   flow_expired: "Esta acción ha expirado. Por favor, comienza de nuevo."
   unmapped_topic: "Este tema no está configurado para acciones del hogar."
   unconnected_notice: "Por favor abre un chat privado con el bot y envía /start para recibir tus notificaciones y listas."
+  connect_button: "🔗 Conectar con el bot"
   invalid_date_format: "Formato de fecha/hora inválido. Formato aceptado: YYYY-MM-DD HH:MM o HH:MM"
   cancelled: "Cancelado"
   confirmed: "¡Confirmado!"
@@ -118,9 +122,9 @@ general:
   postponed_until: "Pospuesto hasta %s."
 
 status:
-  header: "Estado de miembros del hogar:"
-  connected: "%s — conectado"
-  not_connected: "%s — abre el bot y presiona Iniciar"
+  header: "🏠 Miembros del hogar"
+  connected: "✅ %s — conectado"
+  not_connected: "⏳ %s — pendiente: abre el bot y toca Iniciar"
 
 help:
   text: "¡Bienvenido a home-ctl! Usa /add o /list en los temas de Compras, Tareas o Recordatorios, o /list en privado."
@@ -133,6 +137,11 @@ datetime:
   today: "hoy a las %s"
   tomorrow: "mañana a las %s"
   yesterday: "ayer a las %s"
+  day: "%[1]s %[2]d %[3]s"
+  day_year: "%[1]s %[2]d %[3]s %[4]d"
+  day_today: "hoy"
+  day_tomorrow: "mañana"
+  day_yesterday: "ayer"
 
 telegram:
   commands:
@@ -185,5 +194,11 @@ picker:
   prompt_type_date: "Envía una fecha (AAAA-MM-DD) o fecha/hora (AAAA-MM-DD HH:MM):"
   prompt_type_interval: "Envía un número entero del 1 al 99 para el intervalo:"
   prompt_type_minute: "Envía un minuto del 00 al 59:"
+  prompt_emoji: "Elige un emoji:"
+  prompt_type_emoji: "Envía un emoji (sin letras ni números):"
+  invalid_emoji: "Por favor envía un emoji corto, sin letras ni números."
+  btn_skip: "Omitir"
+  emoji_suggestions_chores: "🧹,🧽,🚰,🗑️,🧺,🍽️,🚿,🌱"
+  emoji_suggestions_reminders: "⏰,💊,📞,💡,💳,🎂,🏥,🛒"
   months: "enero,febrero,marzo,abril,mayo,junio,julio,agosto,septiembre,octubre,noviembre,diciembre"
 

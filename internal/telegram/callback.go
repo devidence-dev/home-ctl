@@ -41,6 +41,7 @@ const (
 	CallbackFlowDate           CallbackKind = "fl:d"
 	CallbackFlowHour           CallbackKind = "fl:h"
 	CallbackFlowMinute         CallbackKind = "fl:mi"
+	CallbackFlowEmoji          CallbackKind = "fl:em"
 )
 
 // ParsedCallback holds parsed callback data with the actor guaranteed to be the update sender.
@@ -285,6 +286,20 @@ func ParseCallbackData(data string, actorID int64) (*ParsedCallback, error) {
 			return nil, ErrMalformedCallback
 		}
 		return &ParsedCallback{Kind: CallbackFlowMinute, TargetID: int64(mi), Payload: parts[2], ActorID: actorID}, nil
+
+	case CallbackFlowEmoji:
+		if len(parts) != 3 {
+			return nil, ErrMalformedCallback
+		}
+		if parts[2] == "o" || parts[2] == "skip" {
+			return &ParsedCallback{Kind: CallbackFlowEmoji, Payload: parts[2], ActorID: actorID}, nil
+		}
+		// The index is checked against the locale suggestion list by the handler.
+		n, err := strconv.Atoi(parts[2])
+		if err != nil || n < 0 || n > 99 {
+			return nil, ErrMalformedCallback
+		}
+		return &ParsedCallback{Kind: CallbackFlowEmoji, TargetID: int64(n), Payload: parts[2], ActorID: actorID}, nil
 
 	default:
 		return nil, ErrMalformedCallback

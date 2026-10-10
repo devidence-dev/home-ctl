@@ -120,6 +120,10 @@ func (f *fakeTG) SetMyCommands(_ context.Context, _ telegram.BotCommandScope, _ 
 	return nil
 }
 
+func (f *fakeTG) GetMe(_ context.Context) (telegram.User, error) {
+	return telegram.User{ID: 999000, FirstName: "home-ctl", Username: "home_ctl_bot"}, nil
+}
+
 func (f *fakeTG) LastSent() *sentMsg {
 	f.mu.Lock()
 	defer f.mu.Unlock()

@@ -59,11 +59,22 @@ func TestPrivateList_EntryLayout(t *testing.T) {
 	check(err)
 	_, err = env.chores.ScheduleOccurrence(ctx, 103, bebedero.ID, 103, at(8, 23, 5))
 	check(err)
+	// Upcoming: a quarterly chore due Sat Oct 17.
+	filter, err := env.chores.CreateDefinition(ctx, 103, "Cambiar filtro de agua", "💧", "",
+		&recurrence.Rule{Interval: 3, Unit: recurrence.UnitMonth, Anchor: recurrence.AnchorScheduled})
+	check(err)
+	_, err = env.chores.ScheduleOccurrence(ctx, 103, filter.ID, 103, at(17, 10, 0))
+	check(err)
 
-	// Bob (en) via /list in Reminders: an overdue reminder, then a one-time reminder without recurrence text.
+	// Bob (en) via /list in Reminders: an overdue reminder, one earlier today that is already past,
+	// then a one-time reminder without recurrence text.
 	callReminder, err := env.reminders.CreateDefinition(ctx, 101, 102, "Call mom", "⏰", "", nil)
 	check(err)
 	_, err = env.reminders.ScheduleOccurrence(ctx, 101, callReminder.ID, at(7, 18, 0))
+	check(err)
+	pills, err := env.reminders.CreateDefinition(ctx, 101, 102, "Take pills", "⏰", "", nil)
+	check(err)
+	_, err = env.reminders.ScheduleOccurrence(ctx, 101, pills.ID, at(8, 9, 0))
 	check(err)
 	medicine, err := env.reminders.CreateDefinition(ctx, 101, 102, "Buy medicine", "⏰", "", nil)
 	check(err)
@@ -77,19 +88,26 @@ func TestPrivateList_EntryLayout(t *testing.T) {
 	if sent == nil {
 		t.Fatal("expected chores overview for Charlie")
 	}
+	// Groups appear in order, each under its header; the empty Tomorrow group is omitted.
 	for _, want := range []string{
-		"1. 🚿 Lavar el baño\n⚠️ Venció: ayer a las 18:00",
-		"2. 🧹 Limpiar bebedero de los niños\n📅 hoy a las 23:05 · 🔁 Cada 2 semanas",
+		"🔴 Vencidas\n🚿 Lavar el baño\n╰┈➤ ayer · 18:00",
+		"🟡 Hoy\n🧹 Limpiar bebedero de los niños\n╰┈➤ 23:05 · 🔁 Cada 2 semanas",
+		"⚪ Próximas\n💧 Cambiar filtro de agua\n╰┈➤ sáb 17 oct · 10:00 · 🔁 Cada 3 meses",
 	} {
 		if !strings.Contains(sent.Text, want) {
 			t.Errorf("expected body to contain %q, got:\n%s", want, sent.Text)
 		}
 	}
-	if got := sent.Markup.InlineKeyboard[0][0].Text; got != "1. 🚿 Lavar el baño" {
-		t.Errorf("expected numbered button, got %q", got)
+	if strings.Contains(sent.Text, "🟢 Mañana") {
+		t.Errorf("empty Tomorrow group must not render, got:\n%s", sent.Text)
 	}
-	if got := sent.Markup.InlineKeyboard[1][0].Text; got != "2. 🧹 Limpiar bebedero de los niños" {
-		t.Errorf("expected numbered button, got %q", got)
+	if strings.Contains(sent.Text, "📅") {
+		t.Errorf("entries must not carry the old date line, got:\n%s", sent.Text)
+	}
+	for i, want := range []string{"🚿 Lavar el baño", "🧹 Limpiar bebedero de los niños", "💧 Cambiar filtro de agua"} {
+		if got := sent.Markup.InlineKeyboard[i][0].Text; got != want {
+			t.Errorf("button %d: got %q, want %q (unnumbered, body order)", i, got, want)
+		}
 	}
 
 	check(env.router.HandleUpdate(ctx, telegram.Update{UpdateID: 2, Message: &telegram.Message{
@@ -101,8 +119,9 @@ func TestPrivateList_EntryLayout(t *testing.T) {
 		t.Fatalf("expected reminders overview in Bob's private chat, got: %+v", sent)
 	}
 	for _, want := range []string{
-		"1. ⏰ Call mom\n⚠️ Overdue: yesterday at 18:00",
-		"2. ⏰ Buy medicine\n📅 tomorrow at 10:00",
+		"🔴 Overdue\n⏰ Call mom\n╰┈➤ yesterday · 18:00",
+		"⏰ Take pills\n╰┈➤ today · 09:00",
+		"🟢 Tomorrow\n⏰ Buy medicine\n╰┈➤ 10:00",
 	} {
 		if !strings.Contains(sent.Text, want) {
 			t.Errorf("expected body to contain %q, got:\n%s", want, sent.Text)
@@ -110,6 +129,12 @@ func TestPrivateList_EntryLayout(t *testing.T) {
 	}
 	if strings.Contains(sent.Text, "🔁") {
 		t.Errorf("one-time reminders must not show recurrence text, got:\n%s", sent.Text)
+	}
+	if strings.Contains(sent.Text, "Upcoming") {
+		t.Errorf("empty Upcoming group must not render, got:\n%s", sent.Text)
+	}
+	if got := sent.Markup.InlineKeyboard[1][0].Text; got != "⏰ Take pills" {
+		t.Errorf("expected unnumbered button in body order, got %q", got)
 	}
 }
 
@@ -141,7 +166,7 @@ func TestPrivateList_ViewSwitch(t *testing.T) {
 	if row == nil {
 		t.Fatalf("expected switch row on empty chores view, got: %+v", sent.Markup)
 	}
-	if want := "• " + env.i18n.T("en", "lists.view_chores"); row[0].Text != want {
+	if want := env.i18n.T("en", "lists.view_chores"); row[0].Text != want {
 		t.Errorf("expected marked chores button %q, got %q", want, row[0].Text)
 	}
 
@@ -160,7 +185,7 @@ func TestPrivateList_ViewSwitch(t *testing.T) {
 	if row == nil {
 		t.Fatalf("expected switch row on reminders view, got: %+v", edited.Markup)
 	}
-	if want := "• " + env.i18n.T("en", "lists.view_reminders"); row[1].Text != want {
+	if want := env.i18n.T("en", "lists.view_reminders"); row[1].Text != want {
 		t.Errorf("expected marked reminders button %q, got %q", want, row[1].Text)
 	}
 

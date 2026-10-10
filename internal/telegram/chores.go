@@ -108,6 +108,12 @@ func (r *Router) handleChoresAdd(ctx context.Context, member *household.Member, 
 	return r.showFlowMessage(ctx, st, prompt, &InlineKeyboardMarkup{InlineKeyboard: rows}, true)
 }
 
+func (r *Router) promptChoreEmoji(ctx context.Context, state *flow.State, locale string, payload choreFlowPayload) error {
+	suggestions := EmojiSuggestions(r.i18n, locale, "picker.emoji_suggestions_chores")
+	prompt, markup := RenderEmojiStep(r.i18n, locale, suggestions)
+	return r.showFlowMessage(ctx, state, r.flowStepText(locale, choreContext(payload), prompt), markup)
+}
+
 func (r *Router) promptChoreAssignee(ctx context.Context, state *flow.State, locale string, payload choreFlowPayload) error {
 	members, err := r.household.ListActiveMembers(ctx)
 	if err != nil {
@@ -221,7 +227,18 @@ func (r *Router) handleChoresFlowText(ctx context.Context, member *household.Mem
 			return nil
 		}
 		payload.Name = text
-		payload.Emoji = "🧹"
+		_ = r.flow.Set(ctx, flowKey, "chore_emoji", payload, r.cfg.FlowTTL)
+		return r.reanchorFlow(ctx, state, func() error {
+			return r.promptChoreEmoji(ctx, state, locale, payload)
+		})
+
+	case "chore_typed_emoji":
+		emoji, err := ValidateTypedEmoji(text)
+		if err != nil {
+			return r.reanchorRejected(ctx, state, locale, choreContext(payload),
+				r.i18n.T(locale, "picker.invalid_emoji"), r.i18n.T(locale, "picker.prompt_type_emoji"))
+		}
+		payload.Emoji = emoji
 		_ = r.flow.Set(ctx, flowKey, "chore_assignee", payload, r.cfg.FlowTTL)
 		return r.reanchorFlow(ctx, state, func() error {
 			return r.promptChoreAssignee(ctx, state, locale, payload)
@@ -341,6 +358,26 @@ func (r *Router) handleChoresFlowCallback(ctx context.Context, member *household
 		_ = r.client.AnswerCallbackQuery(ctx, cq.ID, "", false)
 		prompt := r.i18n.T(locale, "chores.prompt_new_name")
 		return r.showFlowMessage(ctx, state, prompt, r.cancelOnlyMarkup(locale))
+
+	case CallbackFlowEmoji:
+		_ = r.client.AnswerCallbackQuery(ctx, cq.ID, "", false)
+		switch parsed.Payload {
+		case "o":
+			_ = r.flow.Set(ctx, flowKey, "chore_typed_emoji", payload, r.cfg.FlowTTL)
+			prompt := r.i18n.T(locale, "picker.prompt_type_emoji")
+			return r.showFlowMessage(ctx, state, r.flowStepText(locale, choreContext(payload), prompt), r.cancelOnlyMarkup(locale))
+		case "skip":
+			payload.Emoji = "🧹"
+		default:
+			suggestions := EmojiSuggestions(r.i18n, locale, "picker.emoji_suggestions_chores")
+			if int(parsed.TargetID) >= len(suggestions) {
+				// Out-of-range index: nothing changes, the step stays as it is.
+				return nil
+			}
+			payload.Emoji = suggestions[parsed.TargetID]
+		}
+		_ = r.flow.Set(ctx, flowKey, "chore_assignee", payload, r.cfg.FlowTTL)
+		return r.promptChoreAssignee(ctx, state, locale, payload)
 
 	case CallbackFlowSelect:
 		defs, _ := r.chores.ListDefinitions(ctx)

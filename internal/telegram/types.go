@@ -20,6 +20,8 @@ type Chat struct {
 type InlineKeyboardButton struct {
 	Text         string `json:"text"`
 	CallbackData string `json:"callback_data,omitempty"`
+	// URL opens a link instead of sending a callback; use it without CallbackData.
+	URL string `json:"url,omitempty"`
 }
 
 // InlineKeyboardMarkup represents an inline keyboard markup.

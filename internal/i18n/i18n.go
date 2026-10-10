@@ -40,12 +40,20 @@ var DefaultRequiredKeys = []string{
 	"datetime.today",
 	"datetime.tomorrow",
 	"datetime.yesterday",
+	"datetime.day",
+	"datetime.day_year",
+	"datetime.day_today",
+	"datetime.day_tomorrow",
+	"datetime.day_yesterday",
 	"telegram.commands.add.description",
 	"telegram.commands.list.description",
 	"telegram.commands.private_list.description",
-	"lists.due",
-	"lists.due_recurring",
-	"lists.overdue",
+	"lists.group_overdue",
+	"lists.group_today",
+	"lists.group_tomorrow",
+	"lists.group_upcoming",
+	"lists.entry_detail",
+	"lists.entry_recurrence",
 	"lists.view_chores",
 	"lists.view_reminders",
 	"telegram.commands.status.description",
@@ -92,6 +100,12 @@ var DefaultRequiredKeys = []string{
 	"picker.prompt_type_date",
 	"picker.prompt_type_interval",
 	"picker.prompt_type_minute",
+	"picker.prompt_emoji",
+	"picker.prompt_type_emoji",
+	"picker.invalid_emoji",
+	"picker.btn_skip",
+	"picker.emoji_suggestions_chores",
+	"picker.emoji_suggestions_reminders",
 	"picker.months",
 }
 
@@ -245,27 +259,70 @@ func flattenMap(prefix string, m map[string]interface{}, out map[string]string) 
 // names, with the year added only when it differs from now's. Names and layouts come from the
 // locale files, so persisted timestamps and domain logic stay locale-independent.
 func (b *Bundle) FormatDateTime(locale string, t, now time.Time, loc *time.Location) string {
-	lt, ln := t.In(loc), now.In(loc)
+	lt := t.In(loc)
 	hhmm := fmt.Sprintf("%02d:%02d", lt.Hour(), lt.Minute())
 
-	ty, tm, td := lt.Date()
-	ny, nm, nd := ln.Date()
-	today := time.Date(ny, nm, nd, 0, 0, 0, 0, loc)
-	switch day := time.Date(ty, tm, td, 0, 0, 0, 0, loc); {
-	case day.Equal(today):
-		return b.T(locale, "datetime.today", hhmm)
-	case day.Equal(today.AddDate(0, 0, 1)):
-		return b.T(locale, "datetime.tomorrow", hhmm)
-	case day.Equal(today.AddDate(0, 0, -1)):
-		return b.T(locale, "datetime.yesterday", hhmm)
+	if offset, ok := relativeDay(t, now, loc); ok {
+		switch offset {
+		case -1:
+			return b.T(locale, "datetime.yesterday", hhmm)
+		case 0:
+			return b.T(locale, "datetime.today", hhmm)
+		default:
+			return b.T(locale, "datetime.tomorrow", hhmm)
+		}
 	}
 
+	weekday, month := b.weekdayAndMonth(locale, lt)
+	if lt.Year() != now.In(loc).Year() {
+		return b.T(locale, "datetime.full_year", weekday, lt.Day(), month, lt.Hour(), lt.Minute(), lt.Year())
+	}
+	return b.T(locale, "datetime.full", weekday, lt.Day(), month, lt.Hour(), lt.Minute())
+}
+
+// FormatDay renders only the calendar day of t, without a time, for users of locale in loc: "yesterday",
+// "today" or "tomorrow" relative to now, otherwise the weekday, day and month, with the year when it
+// differs from now's. Used as the day part of a list line such as "ayer · 18:00".
+func (b *Bundle) FormatDay(locale string, t, now time.Time, loc *time.Location) string {
+	if offset, ok := relativeDay(t, now, loc); ok {
+		switch offset {
+		case -1:
+			return b.T(locale, "datetime.day_yesterday")
+		case 0:
+			return b.T(locale, "datetime.day_today")
+		default:
+			return b.T(locale, "datetime.day_tomorrow")
+		}
+	}
+
+	lt := t.In(loc)
+	weekday, month := b.weekdayAndMonth(locale, lt)
+	if lt.Year() != now.In(loc).Year() {
+		return b.T(locale, "datetime.day_year", weekday, lt.Day(), month, lt.Year())
+	}
+	return b.T(locale, "datetime.day", weekday, lt.Day(), month)
+}
+
+// relativeDay returns -1, 0 or 1 when t's calendar day in loc is yesterday, today or tomorrow relative
+// to now, and false otherwise.
+func relativeDay(t, now time.Time, loc *time.Location) (int, bool) {
+	ty, tm, td := t.In(loc).Date()
+	ny, nm, nd := now.In(loc).Date()
+	today := time.Date(ny, nm, nd, 0, 0, 0, 0, loc)
+	day := time.Date(ty, tm, td, 0, 0, 0, 0, loc)
+	for offset := -1; offset <= 1; offset++ {
+		if day.Equal(today.AddDate(0, 0, offset)) {
+			return offset, true
+		}
+	}
+	return 0, false
+}
+
+// weekdayAndMonth returns the locale's abbreviated weekday and month names for lt.
+func (b *Bundle) weekdayAndMonth(locale string, lt time.Time) (string, string) {
 	weekday := nameAt(b.T(locale, "datetime.weekdays"), int(lt.Weekday()), 7, lt.Weekday().String()[:3])
 	month := nameAt(b.T(locale, "datetime.months"), int(lt.Month())-1, 12, lt.Month().String()[:3])
-	if ty != ny {
-		return b.T(locale, "datetime.full_year", weekday, td, month, lt.Hour(), lt.Minute(), ty)
-	}
-	return b.T(locale, "datetime.full", weekday, td, month, lt.Hour(), lt.Minute())
+	return weekday, month
 }
 
 // nameAt returns the idx-th comma-separated name, or fallback when the list is malformed.

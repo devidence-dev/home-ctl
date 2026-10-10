@@ -19,6 +19,7 @@ type Client interface {
 	AnswerCallbackQuery(ctx context.Context, callbackQueryID string, text string, showAlert bool) error
 	GetUpdates(ctx context.Context, offset int64, timeout int) ([]Update, error)
 	SetMyCommands(ctx context.Context, scope BotCommandScope, languageCode string, commands []BotCommand) error
+	GetMe(ctx context.Context) (User, error)
 }
 
 // HTTPClient implements Client using raw net/http.
@@ -176,6 +177,15 @@ func (c *HTTPClient) GetUpdates(ctx context.Context, offset int64, timeout int) 
 		return nil, err
 	}
 	return updates, nil
+}
+
+// GetMe returns the bot's own user, whose username builds the connect deep link.
+func (c *HTTPClient) GetMe(ctx context.Context) (User, error) {
+	var me User
+	if err := c.call(ctx, "getMe", nil, &me); err != nil {
+		return User{}, err
+	}
+	return me, nil
 }
 
 // SetMyCommands changes the list of the bot's commands for the given scope and user language.

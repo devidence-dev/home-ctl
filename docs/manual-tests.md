@@ -25,8 +25,12 @@ Para ver el log en vivo: `docker logs -f homectl`.
 
 ## 2. Acceso y onboarding
 
-- [x] `/start` en privado confirma la conexión.
-- [x] `/status` en el grupo lista a los miembros como conectados o "abre el bot y presiona Iniciar".
+- [x] `/start` en privado responde con la ayuda y confirma la conexión.
+- [ ] Un miembro no conectado escribe `/list` en privado: recibe su lista y `/status` ya lo muestra conectado.
+- [ ] Un miembro no conectado toca un botón en un mensaje privado del bot: queda conectado.
+- [ ] Un miembro no conectado escribe `/status` en el grupo: sigue pendiente (la actividad del grupo no conecta).
+- [ ] Un miembro no conectado escribe `/list` en el topic Chores: el aviso trae el botón "🔗 Conectar con el bot"; al tocarlo se abre el chat privado con `/start connect` y queda conectado.
+- [ ] `/status` en el grupo muestra "🏠 Miembros del hogar", con ✅ "conectado" o ⏳ "pendiente: abre el bot y toca Iniciar" por cada miembro.
 - [x] `/add` en privado responde con la ayuda.
 - [x] Alguien que no está en `users.yaml` escribe `/add` en el grupo: no pasa nada.
 - [x] Esa misma persona envía `/start` al bot: no queda conectada.
@@ -59,6 +63,8 @@ Para ver el log en vivo: `docker logs -f homectl`.
 - [ ] `/add` abre la selección de tarea o pide nombre nuevo si el catálogo está vacío; los pasos con botones editan este único mensaje sin enviar mensajes intermedios.
 - [ ] Al seleccionar una tarea existente, el mensaje se edita para pedir el asignado.
 - [ ] Al escribir un nombre nuevo, el paso de asignado aparece como mensaje nuevo debajo de tu texto y el mensaje anterior desaparece; los botones que aún pulses en el mensaje anterior dan aviso de que la acción expiró.
+- [ ] Tras escribir el nombre de una tarea nueva, aparece el paso de emoji: cuatro filas de botones (8 sugerencias), luego `Otro`, `Omitir` y `❌ Cancelar`. Tocar una sugerencia (p. ej. 🚰) la usa; `Omitir` deja 🧹; `Otro` pide escribir un emoji. Un texto con letras o números (p. ej. `plants`) se rechaza con aviso y se vuelve a pedir.
+- [ ] Seleccionar una tarea existente del catálogo no pregunta emoji y conserva el suyo.
 - [ ] Cada paso después del título empieza con una cabecera con lo ya elegido, por ejemplo `🧹 Limpiar bebedero · Alice · octubre 14` (en inglés: `🧹 Clean kitchen · Alice · October 14`).
 - [ ] Paso de recurrencia: elegir "Una vez" salta intervalo y anclaje directamente al calendario de fecha; tareas recurrentes piden tipo (Diario, Semanal, Mensual).
 - [ ] Intervalo: botones 1 a 12 o botón "Otro" para escribir un número entero (1 a 99); valores inválidos muestran guía y mantienen el paso. Los textos de recurrencia usan singular y plural: "Cada semana" para 1, "Cada 2 semanas" para más de 1.
@@ -84,6 +90,7 @@ Para ver el log en vivo: `docker logs -f homectl`.
 - [ ] `/add` en Reminders pide el título en un mensaje único.
 - [ ] Al enviar el título, el selector de destinatario aparece como mensaje nuevo debajo de tu texto y el mensaje del título desaparece.
 - [ ] Mismo selector guiado: recurrencia ("Una vez" o periódica), intervalo, calendario de fecha, hora, minuto, anclaje y confirmación. Los pasos con botones editan el mismo mensaje; una respuesta escrita (fecha, intervalo, minuto) abre el siguiente paso como mensaje nuevo debajo de tu texto.
+- [ ] Tras escribir el título, aparece el paso de emoji con las mismas reglas que en tareas, con sugerencias propias (p. ej. 💡, 💊). `Omitir` deja ⏰; un emoji escrito se valida igual que en tareas.
 - [ ] Cada paso después del título muestra la cabecera con lo ya elegido (`⏰ Título · Persona · fecha`).
 - [ ] Horas y minutos pasados para hoy son inertes; "Cambiar fecha" vuelve al calendario; una hora pasada se explica en el mensaje con `⚠️ Esa hora ya pasó.` y no crea nada.
 - [ ] El resumen de confirmación usa las mismas líneas con emoji que en tareas; en un recordatorio de una sola vez muestra `🔁 Una vez` y no tiene línea `⏭️`.
@@ -116,10 +123,11 @@ Para ver el log en vivo: `docker logs -f homectl`.
 - [ ] `/list` en privado abre la vista de tareas (botón `• 🧹 Tareas` marcado) con el botón `⏰ Recordatorios`.
 - [ ] Pulsar `⏰ Recordatorios` edita el mismo mensaje a la vista de recordatorios; pulsar `🧹 Tareas` vuelve a la de tareas.
 - [ ] Una vista vacía (sin tareas o sin recordatorios) sigue mostrando los botones de cambio.
-- [ ] Cada elemento tiene número, emoji, nombre y una línea con la fecha (`📅 hoy a las 23:05`, `📅 mañana a las 10:00`).
+- [ ] Las entradas se agrupan por día bajo cabeceras `🔴 Vencidas`, `🟡 Hoy`, `🟢 Mañana` y `⚪ Próximas`, en ese orden; un grupo vacío no aparece.
+- [ ] Cada entrada tiene emoji, nombre y una línea `╰┈➤` con la hora (`╰┈➤ 23:05`, `╰┈➤ 10:00`); en vencidas y próximas, la línea incluye el día (`╰┈➤ ayer · 18:00`, `╰┈➤ sáb 17 oct · 10:00`).
 - [ ] Un elemento recurrente añade la recurrencia en la misma línea (`· 🔁 Cada 2 semanas`); uno de una sola vez no muestra `🔁`.
-- [ ] Un elemento vencido muestra `⚠️ Venció: ayer a las 18:00` en lugar de la línea de fecha.
-- [ ] Los botones son numerados (`1. 🚿 Lavar el baño`) y abren el detalle; Volver regresa a la misma lista.
+- [ ] Un elemento ya pasado va en `🔴 Vencidas`, también si su hora fue temprano hoy (`╰┈➤ hoy · 09:00`).
+- [ ] Los botones no llevan número, siguen el orden del cuerpo (`🚿 Lavar el baño`) y abren el detalle; Volver regresa a la misma lista.
 - [ ] Con más de 20 elementos, la lista muestra 20 y la línea `+N más` al final.
 
 ## Diagnóstico si algo falla

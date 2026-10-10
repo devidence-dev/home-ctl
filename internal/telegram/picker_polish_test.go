@@ -22,7 +22,7 @@ func polishChoreText(ctx context.Context, env *testEnv, updateID, userID int64, 
 	})
 }
 
-// startChoreFlow runs /add and types the chore name, leaving the assignee step active.
+// startChoreFlow runs /add, types the chore name and skips the emoji, leaving the assignee step active.
 // It returns the id of the name prompt that the typed answer superseded.
 func startChoreFlow(ctx context.Context, t *testing.T, env *testEnv, name string) int64 {
 	t.Helper()
@@ -32,6 +32,9 @@ func startChoreFlow(ctx context.Context, t *testing.T, env *testEnv, name string
 	namePrompt := env.client.LastSent().MessageID
 	if err := polishChoreText(ctx, env, 2, 101, name); err != nil {
 		t.Fatalf("name failed: %v", err)
+	}
+	if err := pressChoreCallback(ctx, env, 3, 101, "fl:em:skip"); err != nil {
+		t.Fatalf("emoji skip failed: %v", err)
 	}
 	return namePrompt
 }
@@ -345,7 +348,7 @@ func TestTypedAnswer_HourStepHeaderInSpanish(t *testing.T) {
 	if err := charlie(2, "Clean kitchen"); err != nil {
 		t.Fatalf("name failed: %v", err)
 	}
-	for i, data := range []string{"fl:usr:103", "fl:rt:once", "fl:d:2026-10-14"} {
+	for i, data := range []string{"fl:em:skip", "fl:usr:103", "fl:rt:once", "fl:d:2026-10-14"} {
 		if err := pressChoreCallback(ctx, env, int64(10+i), 103, data); err != nil {
 			t.Fatalf("%s failed: %v", data, err)
 		}

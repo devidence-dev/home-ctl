@@ -7,7 +7,7 @@ Lets members create reminders targeted at a household member, with repeat notifi
 ## Requirements
 
 ### Requirement: Reminder definition and creation
-A reminder definition SHALL have a title, optional emoji, optional description, a target member, and optional recurrence rule and anchor. `/add` in the Reminders topic SHALL collect these using the guided scheduling picker (recurrence type, interval when recurrent, explicit first due date and time, anchor when recurrent) and create the first occurrence only after confirmation, with `scheduled_at` equal to `due_at`.
+A reminder definition SHALL have a title, optional emoji, optional description, a target member, and optional recurrence rule and anchor. `/add` in the Reminders topic SHALL ask for the emoji right after the title (suggestion buttons, Other to type one with the same validation as chores, Skip to keep ⏰) and SHALL collect the rest using the guided scheduling picker (recurrence type, interval when recurrent, explicit first due date and time, anchor when recurrent) and create the first occurrence only after confirmation, with `scheduled_at` equal to `due_at`.
 
 #### Scenario: One-off reminder
 - **WHEN** Alice creates 💊 "Buy medicine" for Bob, picks One time, Friday Oct 9 2026 10:00, and confirms
@@ -24,6 +24,14 @@ A reminder definition SHALL have a title, optional emoji, optional description, 
 #### Scenario: Target not a member
 - **WHEN** a callback names a target that is not an active member
 - **THEN** the creation is rejected
+
+#### Scenario: Reminder emoji chosen
+- **WHEN** Alice creates reminder "Pagar la luz" for Bob and presses the 💡 suggestion
+- **THEN** the definition is stored with 💡 and Bob's notification shows "💡 Pagar la luz"
+
+#### Scenario: Reminder emoji skipped
+- **WHEN** Alice presses Skip at the emoji step
+- **THEN** the reminder is stored with ⏰
 
 ### Requirement: Target-only resolution
 Only the target member of a reminder occurrence SHALL be allowed to complete or postpone it, enforced by the application logic.
@@ -86,7 +94,7 @@ Postponing SHALL apply only to open occurrences, change only `due_at`, record ac
 - **THEN** exactly one transition wins and the occurrence is never moved after completion
 
 ### Requirement: Private personal list
-`/list` in the Reminders topic SHALL deliver the requester's own open occurrences privately with the same entry layout (number, emoji, title, due date and time, recurrence, overdue marker), numbered buttons, detail, Done, Postpone and Back behavior as chores, sorted by `due_at`. The reminders view SHALL offer the switch to the chores view, editing the same message.
+`/list` in the Reminders topic SHALL deliver the requester's own open occurrences privately with the same grouped layout (traffic-light day headers, emoji and title, "╰┈➤ " time line, recurrence), one unnumbered button per occurrence, detail, Done, Postpone and Back behavior as chores, sorted by `due_at`. The reminders view SHALL offer the switch to the chores view, editing the same message.
 
 #### Scenario: Bob lists reminders
 - **WHEN** Bob runs `/list` in Reminders
@@ -94,7 +102,7 @@ Postponing SHALL apply only to open occurrences, change only `due_at`, record ac
 
 #### Scenario: Reminder entries show date and time
 - **WHEN** it is Thu Oct 8 2026 21:00 and Bob (locale `en`) has ⏰ "Buy medicine" due Fri Oct 9 2026 10:00, one time
-- **THEN** the body shows "1. ⏰ Buy medicine" with "📅 tomorrow at 10:00" and no recurrence text
+- **THEN** the body shows "🟢 Tomorrow" with "⏰ Buy medicine" and "╰┈➤ 10:00", with no recurrence text
 
 #### Scenario: Empty reminders view
 - **WHEN** Bob switches to reminders and has none open

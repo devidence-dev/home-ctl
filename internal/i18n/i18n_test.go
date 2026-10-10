@@ -186,6 +186,43 @@ func TestFormatDateTime_LocalizedAndTimezoneAware(t *testing.T) {
 	}
 }
 
+func TestFormatDay_LocalizedAndTimezoneAware(t *testing.T) {
+	b, err := i18n.NewBundle(filepath.Join("..", "..", "locales"), "en", i18n.DefaultRequiredKeys, nil)
+	if err != nil {
+		t.Fatalf("NewBundle failed: %v", err)
+	}
+	loc, err := time.LoadLocation("America/Guayaquil") // UTC-5, no DST
+	if err != nil {
+		t.Fatalf("load location: %v", err)
+	}
+	now := time.Date(2026, time.October, 5, 23, 30, 0, 0, loc)
+
+	cases := []struct {
+		name, locale string
+		at           time.Time
+		want         string
+	}{
+		{"yesterday en", "en", time.Date(2026, 10, 4, 18, 0, 0, 0, loc), "yesterday"},
+		{"yesterday es", "es", time.Date(2026, 10, 4, 18, 0, 0, 0, loc), "ayer"},
+		{"today en", "en", time.Date(2026, 10, 5, 18, 0, 0, 0, loc), "today"},
+		{"today es", "es", time.Date(2026, 10, 5, 9, 0, 0, 0, loc), "hoy"},
+		{"tomorrow en", "en", time.Date(2026, 10, 6, 9, 0, 0, 0, loc), "tomorrow"},
+		{"tomorrow es", "es", time.Date(2026, 10, 6, 9, 0, 0, 0, loc), "mañana"},
+		{"later en", "en", time.Date(2026, 10, 10, 10, 5, 0, 0, loc), "Sat, Oct 10"},
+		{"later es", "es", time.Date(2026, 10, 10, 10, 5, 0, 0, loc), "sáb 10 oct"},
+		{"other year en", "en", time.Date(2027, 1, 4, 8, 0, 0, 0, loc), "Mon, Jan 4 2027"},
+		{"other year es", "es", time.Date(2027, 1, 4, 8, 0, 0, 0, loc), "lun 4 ene 2027"},
+		// Stored in UTC: 04:30 UTC Oct 6 is 23:30 Oct 5 in Guayaquil, i.e. "today".
+		{"utc input uses household tz", "en", time.Date(2026, 10, 6, 4, 30, 0, 0, time.UTC), "today"},
+		{"unknown locale falls back to default", "fr", time.Date(2026, 10, 10, 10, 5, 0, 0, loc), "Sat, Oct 10"},
+	}
+	for _, c := range cases {
+		if got := b.FormatDay(c.locale, c.at, now, loc); got != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
 func TestFormatDateTime_MalformedNamesFallBackToEnglishAbbreviations(t *testing.T) {
 	dir := t.TempDir()
 	writeTempLocale(t, dir, "en.yaml", `

@@ -79,15 +79,23 @@ func TestRemindersFlow_OneOff(t *testing.T) {
 	if err := env.router.HandleUpdate(ctx, uTitle); err != nil {
 		t.Fatalf("title text failed: %v", err)
 	}
-	// A typed title re-anchors: the target step is a new message below the text and the title prompt is deleted.
+	// A typed title re-anchors: the emoji step is a new message below the text and the title prompt is deleted.
 	lastSent := env.client.LastSent()
-	if lastSent == nil || lastSent.MessageID == flowMsgID || !strings.Contains(lastSent.Text, "reminder is for") {
-		t.Fatalf("expected target prompt as a new message after the typed title, got: %+v", lastSent)
+	if lastSent == nil || lastSent.MessageID == flowMsgID || !strings.Contains(lastSent.Text, "Choose an emoji") {
+		t.Fatalf("expected emoji prompt as a new message after the typed title, got: %+v", lastSent)
 	}
 	if deleted := env.client.DeletedMessages(); len(deleted) != 1 || deleted[0] != flowMsgID {
 		t.Fatalf("expected title prompt %d deleted, got %v", flowMsgID, deleted)
 	}
 	flowMsgID = lastSent.MessageID // the active flow message from here on
+
+	// 2b. Skip the emoji: the target step edits the same message
+	if err := pressReminderCallback(ctx, env, 30, 101, "fl:em:skip"); err != nil {
+		t.Fatalf("emoji skip failed: %v", err)
+	}
+	if lastEdit := env.client.LastEdited(); lastEdit == nil || lastEdit.MessageID != flowMsgID || !strings.Contains(lastEdit.Text, "reminder is for") {
+		t.Fatalf("expected target prompt on message %d, got: %+v", flowMsgID, lastEdit)
+	}
 
 	// 3. Alice selects Bob (102) as target
 	if err := pressReminderCallback(ctx, env, 3, 101, "fl:usr:102"); err != nil {

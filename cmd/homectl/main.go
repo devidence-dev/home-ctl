@@ -101,6 +101,17 @@ func main() {
 	telegram.RegisterCommands(regCtx, tgClient, bundle, cfg.Telegram.ChatID, bundle.Locales(), logger)
 	regCancel()
 
+	// Best effort, with its own timeout so a slow command registration cannot starve it:
+	// without a username the unconnected notice is sent without its connect button.
+	botUsername := ""
+	meCtx, meCancel := context.WithTimeout(ctx, 10*time.Second)
+	if me, err := tgClient.GetMe(meCtx); err != nil {
+		logger.Warn("failed to read bot username, connect button disabled", "err", err)
+	} else {
+		botUsername = me.Username
+	}
+	meCancel()
+
 	tgNotifier := telegram.NewNotifier(tgClient, hhSvc, bundle, cfg.Telegram.ChatID, cfg.App.DefaultLocale)
 
 	sched := scheduler.New(scheduler.Config{
@@ -142,6 +153,7 @@ func main() {
 			DefaultLocale:    cfg.App.DefaultLocale,
 			FlowTTL:          cfg.App.Flow.TTL,
 			DefaultTimeOfDay: cfg.App.Calendar.DefaultTimeOfDay,
+			BotUsername:      botUsername,
 		},
 		tgClient,
 		hhSvc,

@@ -7,7 +7,7 @@ Lets the household define reusable chores and schedule individual occurrences as
 ## Requirements
 
 ### Requirement: Reusable chore definitions
-The system SHALL keep chore definitions with an emoji, a name and an optional description. A definition SHALL carry the optional recurrence rule and anchor.
+The system SHALL keep chore definitions with an emoji, a name and an optional description. A definition SHALL carry the optional recurrence rule and anchor. When a new chore is created in the flow, the system SHALL ask for its emoji right after the name, offering suggestion buttons, Other to type an emoji, and Skip to keep 🧹. A typed answer SHALL be accepted only when it is non-empty, has no letters or digits and is at most 16 characters; otherwise the member SHALL be asked again. Selecting an existing chore SHALL keep its emoji without asking.
 
 #### Scenario: Create definition
 - **WHEN** Alice creates chore 🧹 "Sweep the floor" with no description in the Chores topic
@@ -16,6 +16,26 @@ The system SHALL keep chore definitions with an emoji, a name and an optional de
 #### Scenario: Blank name rejected
 - **WHEN** a user submits an empty name for a new chore
 - **THEN** nothing is stored and the user is asked again
+
+#### Scenario: Pick a suggested emoji
+- **WHEN** Alice creates chore "Limpiar bebedero de los niños" and presses the 🚰 suggestion
+- **THEN** the definition is stored with 🚰 and the confirmation shows "🚰 Limpiar bebedero de los niños"
+
+#### Scenario: Type an emoji
+- **WHEN** Alice presses Other and sends "🪴"
+- **THEN** the chore is stored with 🪴
+
+#### Scenario: Invalid typed emoji
+- **WHEN** Alice presses Other and sends "plants"
+- **THEN** she is asked again for an emoji and nothing is stored
+
+#### Scenario: Skip keeps the default
+- **WHEN** Alice presses Skip at the emoji step
+- **THEN** the chore is stored with 🧹
+
+#### Scenario: Existing chore keeps its emoji
+- **WHEN** Alice selects the existing chore 🚿 "Lavar el baño" in `/add`
+- **THEN** no emoji is asked and the occurrence uses 🚿
 
 ### Requirement: Chore scheduling flow
 After a chore is selected, the system SHALL collect the assignee (from active members), the recurrence type, the interval when recurrent, an explicit first due date and time, and the recurrence anchor when recurrent, using the guided scheduling picker, and SHALL create the first occurrence only after the user confirms. The first occurrence SHALL have `scheduled_at` equal to `due_at`, and the first due date SHALL be the origin of a recurring series. When the selected chore definition already carries a recurrence rule and anchor, the system SHALL NOT ask for recurrence type, interval or anchor again.
@@ -113,7 +133,7 @@ A chore SHALL produce one private due notification per `due_at`. It SHALL remain
 - **THEN** only one notification attempt exists for that `due_at` and the chore is listed as overdue
 
 ### Requirement: Private personal list
-`/list` in the Chores topic SHALL deliver to the requester's private chat the requester's open occurrences (overdue and upcoming) sorted by `due_at`. The message body SHALL list each occurrence on its own numbered entry with emoji, name, due date and time rendered in the household timezone and the member's locale, the recurrence summary when recurring, and an overdue marker when `due_at` is in the past. There SHALL be one numbered button per occurrence. `/list` sent in the private chat SHALL show the same chores view. Every private list view SHALL offer buttons to switch between the chores and the reminders view, editing the same message. Selecting one SHALL edit the same message into a detail view with Done, Postpone and Back. Back SHALL edit the message to the refreshed list. The group topic SHALL NOT show personal action buttons.
+`/list` in the Chores topic SHALL deliver to the requester's private chat the requester's open occurrences (overdue and upcoming) sorted by `due_at`. The message body SHALL group occurrences by due day in the household timezone under the headers Overdue (🔴, `due_at` before now), Today (🟡), Tomorrow (🟢) and Upcoming (⚪, later days), in that order, omitting empty groups. Each entry SHALL be one line with emoji and name and a second line starting with "╰┈➤ " with the time for Today and Tomorrow, or the localized day and time for Overdue and Upcoming, followed by " · 🔁 " and the recurrence summary when recurring. Entries and buttons SHALL NOT be numbered; there SHALL be one button per occurrence, in the same order as the body. `/list` sent in the private chat SHALL show the same chores view. Every private list view SHALL offer buttons to switch between the chores and the reminders view, editing the same message. Selecting one SHALL edit the same message into a detail view with Done, Postpone and Back. Back SHALL edit the message to the refreshed list. The group topic SHALL NOT show personal action buttons.
 
 #### Scenario: Alice lists her chores
 - **WHEN** Alice runs `/list` in Chores with 🚿 Clean bathroom overdue, 💧 Change water filter due Sat, 🗑 Take out trash due Mon
@@ -121,7 +141,7 @@ A chore SHALL produce one private due notification per `due_at`. It SHALL remain
 
 #### Scenario: Entries show date and time
 - **WHEN** it is Thu Oct 8 2026 21:00 and Pablito (locale `es`) has 🧹 "Limpiar bebedero de los niños" due today 23:05 every 2 weeks and 🚿 "Lavar el baño" due yesterday 18:00
-- **THEN** the body shows "1. 🚿 Lavar el baño" with "⚠️ Venció: ayer a las 18:00" and "2. 🧹 Limpiar bebedero de los niños" with "📅 hoy a las 23:05 · 🔁 Cada 2 semanas", and the buttons read "1. 🚿 Lavar el baño" and "2. 🧹 Limpiar bebedero de los niños"
+- **THEN** the body shows "🔴 Vencidas" with "🚿 Lavar el baño" and "╰┈➤ ayer · 18:00", then "🟡 Hoy" with "🧹 Limpiar bebedero de los niños" and "╰┈➤ 23:05 · 🔁 Cada 2 semanas", no Tomorrow or Upcoming headers, and the buttons read "🚿 Lavar el baño" and "🧹 Limpiar bebedero de los niños" in that order
 
 #### Scenario: Private /list opens the overview
 - **WHEN** Alice sends `/list` in her private chat
@@ -146,3 +166,7 @@ A chore SHALL produce one private due notification per `due_at`. It SHALL remain
 #### Scenario: Long list
 - **WHEN** a member has 35 open occurrences
 - **THEN** the list shows the first 20 by `due_at` and a "+15 more" line
+
+#### Scenario: Upcoming entries show the day
+- **WHEN** it is Thu Oct 8 2026 21:00 and Pablito has 💧 "Cambiar filtro de agua" due Sat Oct 17 2026 10:00 every 3 months
+- **THEN** it appears under "⚪ Próximas" with "╰┈➤ sáb 17 oct · 10:00 · 🔁 Cada 3 meses"

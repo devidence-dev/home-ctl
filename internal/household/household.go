@@ -78,16 +78,17 @@ func (s *Service) Authorize(ctx context.Context, userID int64) (*Member, error) 
 	return m, nil
 }
 
-// HandlePrivateStart records successful onboarding when a member sends /start in a private chat.
-func (s *Service) HandlePrivateStart(ctx context.Context, userID int64, at time.Time) (*Member, error) {
-	m, err := s.Authorize(ctx, userID)
-	if err != nil {
-		return nil, err
+// EnsureConnected records private-chat onboarding for an authorized member. It writes only while the
+// member is not connected, so a repeated call keeps the first connection timestamp.
+func (s *Service) EnsureConnected(ctx context.Context, userID int64, at time.Time) error {
+	if _, err := s.Authorize(ctx, userID); err != nil {
+		return err
 	}
-	if err := s.store.RecordOnboarding(ctx, userID, at); err != nil {
-		return nil, err
+	connected, err := s.IsConnected(ctx, userID)
+	if err != nil || connected {
+		return err
 	}
-	return m, nil
+	return s.store.RecordOnboarding(ctx, userID, at)
 }
 
 // HandleDisconnect marks a member as disconnected when the bot is blocked or messaging fails.

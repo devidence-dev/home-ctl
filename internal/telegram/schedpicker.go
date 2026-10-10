@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 var (
@@ -13,7 +15,26 @@ var (
 	ErrInvalidInterval = errors.New("interval must be a whole number from 1 to 99")
 	// ErrInvalidMinute indicates typed minute is not an integer in [0, 59].
 	ErrInvalidMinute = errors.New("minute must be a whole number from 00 to 59")
+	// ErrInvalidEmoji indicates typed emoji is empty, too long, or contains letters or digits.
+	ErrInvalidEmoji = errors.New("emoji must be a short symbol without letters or digits")
 )
+
+// maxTypedEmojiRunes bounds a typed emoji; flags, skin tones and ZWJ sequences fit well within it.
+const maxTypedEmojiRunes = 16
+
+// ValidateTypedEmoji returns the trimmed emoji typed by the member. Plain text, digits and empty input are rejected.
+func ValidateTypedEmoji(input string) (string, error) {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" || utf8.RuneCountInString(trimmed) > maxTypedEmojiRunes {
+		return "", ErrInvalidEmoji
+	}
+	for _, r := range trimmed {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			return "", ErrInvalidEmoji
+		}
+	}
+	return trimmed, nil
+}
 
 // ValidateTypedInterval validates a typed interval integer between 1 and 99.
 func ValidateTypedInterval(input string) (int, error) {
@@ -372,6 +393,33 @@ func RenderAnchorStep(t PickerTranslator, locale string) (string, *InlineKeyboar
 			{Text: t.T(locale, "buttons.cancel"), CallbackData: "fl:c"},
 		},
 	}
+
+	return prompt, &InlineKeyboardMarkup{InlineKeyboard: rows}
+}
+
+// EmojiSuggestions returns the comma-separated suggestion list stored under key in the locale file.
+func EmojiSuggestions(t PickerTranslator, locale string, key string) []string {
+	return strings.Split(t.T(locale, key), ",")
+}
+
+// RenderEmojiStep renders the emoji suggestions in rows of four, then Other, Skip and Cancel.
+// Suggestion buttons carry only their index, which the handler resolves against the same list.
+func RenderEmojiStep(t PickerTranslator, locale string, suggestions []string) (string, *InlineKeyboardMarkup) {
+	prompt := t.T(locale, "picker.prompt_emoji")
+
+	var rows [][]InlineKeyboardButton
+	for i, s := range suggestions {
+		if i%4 == 0 {
+			rows = append(rows, []InlineKeyboardButton{})
+		}
+		last := len(rows) - 1
+		rows[last] = append(rows[last], InlineKeyboardButton{Text: s, CallbackData: fmt.Sprintf("fl:em:%d", i)})
+	}
+	rows = append(rows, []InlineKeyboardButton{
+		{Text: t.T(locale, "picker.btn_other"), CallbackData: "fl:em:o"},
+		{Text: t.T(locale, "picker.btn_skip"), CallbackData: "fl:em:skip"},
+		{Text: t.T(locale, "buttons.cancel"), CallbackData: "fl:c"},
+	})
 
 	return prompt, &InlineKeyboardMarkup{InlineKeyboard: rows}
 }

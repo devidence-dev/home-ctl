@@ -80,15 +80,23 @@ func TestChoresFlow_OneTime(t *testing.T) {
 	if err := env.router.HandleUpdate(ctx, uName); err != nil {
 		t.Fatalf("name text failed: %v", err)
 	}
-	// A typed answer re-anchors: the assignee step is a new message below the text and the name prompt is deleted.
+	// A typed answer re-anchors: the emoji step is a new message below the text and the name prompt is deleted.
 	lastSent := env.client.LastSent()
-	if lastSent == nil || lastSent.MessageID == flowMsgID || !strings.Contains(lastSent.Text, "Clean kitchen") {
-		t.Fatalf("expected assignee prompt as a new message after the typed name, got: %+v", lastSent)
+	if lastSent == nil || lastSent.MessageID == flowMsgID || !strings.Contains(lastSent.Text, "Choose an emoji") {
+		t.Fatalf("expected emoji prompt as a new message after the typed name, got: %+v", lastSent)
 	}
 	if deleted := env.client.DeletedMessages(); len(deleted) != 1 || deleted[0] != flowMsgID {
 		t.Fatalf("expected name prompt %d deleted, got %v", flowMsgID, deleted)
 	}
 	flowMsgID = lastSent.MessageID // the active flow message from here on
+
+	// 2b. Skip the emoji: the assignee step edits the same message
+	if err := pressChoreCallback(ctx, env, 4, 101, "fl:em:skip"); err != nil {
+		t.Fatalf("emoji skip failed: %v", err)
+	}
+	if lastEdit := env.client.LastEdited(); lastEdit == nil || lastEdit.MessageID != flowMsgID || !strings.Contains(lastEdit.Text, "Clean kitchen") {
+		t.Fatalf("expected assignee prompt on message %d, got: %+v", flowMsgID, lastEdit)
+	}
 
 	// 3. Assign to Alice (101) -> moves to recurrence type step
 	if err := pressChoreCallback(ctx, env, 3, 101, "fl:usr:101"); err != nil {

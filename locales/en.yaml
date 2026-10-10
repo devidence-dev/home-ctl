@@ -86,9 +86,12 @@ reminders:
   prompt_anchor: "Choose recurrence anchor for '%s':"
 
 lists:
-  due: "📅 %s"
-  due_recurring: "📅 %s · 🔁 %s"
-  overdue: "⚠️ Overdue: %s"
+  group_overdue: "🔴 Overdue"
+  group_today: "🟡 Today"
+  group_tomorrow: "🟢 Tomorrow"
+  group_upcoming: "⚪ Upcoming"
+  entry_detail: "╰┈➤ %s"
+  entry_recurrence: "%s · 🔁 %s"
   view_chores: "🧹 Chores"
   view_reminders: "⏰ Reminders"
 
@@ -97,6 +100,7 @@ general:
   flow_expired: "This action has expired. Please start again."
   unmapped_topic: "This topic is not configured for household actions."
   unconnected_notice: "Please open a private chat with the bot and send /start to receive your notifications and lists."
+  connect_button: "🔗 Connect with the bot"
   invalid_date_format: "Invalid date/time format. Accepted format: YYYY-MM-DD HH:MM or HH:MM"
   cancelled: "Cancelled"
   confirmed: "Confirmed!"
@@ -118,9 +122,9 @@ general:
   postponed_until: "Postponed until %s."
 
 status:
-  header: "Household Members Status:"
-  connected: "%s — connected"
-  not_connected: "%s — open the bot and press Start"
+  header: "🏠 Household members"
+  connected: "✅ %s — connected"
+  not_connected: "⏳ %s — pending: open the bot and tap Start"
 
 help:
   text: "Welcome to home-ctl! Use /add or /list in the Shopping, Chores, or Reminders topics, or /list in private."
@@ -133,6 +137,11 @@ datetime:
   today: "today at %s"
   tomorrow: "tomorrow at %s"
   yesterday: "yesterday at %s"
+  day: "%[1]s, %[3]s %[2]d"
+  day_year: "%[1]s, %[3]s %[2]d %[4]d"
+  day_today: "today"
+  day_tomorrow: "tomorrow"
+  day_yesterday: "yesterday"
 
 telegram:
   commands:
@@ -185,5 +194,11 @@ picker:
   prompt_type_date: "Send a date (YYYY-MM-DD) or date/time (YYYY-MM-DD HH:MM):"
   prompt_type_interval: "Send a whole number from 1 to 99 for the interval:"
   prompt_type_minute: "Send a minute from 00 to 59:"
+  prompt_emoji: "Choose an emoji:"
+  prompt_type_emoji: "Send an emoji (no letters or digits):"
+  invalid_emoji: "Please send a short emoji without letters or digits."
+  btn_skip: "Skip"
+  emoji_suggestions_chores: "🧹,🧽,🚰,🗑️,🧺,🍽️,🚿,🌱"
+  emoji_suggestions_reminders: "⏰,💊,📞,💡,💳,🎂,🏥,🛒"
   months: "January,February,March,April,May,June,July,August,September,October,November,December"
 
