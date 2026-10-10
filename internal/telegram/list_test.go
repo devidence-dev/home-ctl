@@ -77,8 +77,8 @@ func TestPrivateList_NavigationAndActions(t *testing.T) {
 	if last == nil || last.ChatID != 101 {
 		t.Fatalf("expected list sent to Alice private chat, got: %+v", last)
 	}
-	if len(last.Markup.InlineKeyboard) != 2 {
-		t.Fatalf("expected 2 chore buttons, got: %d", len(last.Markup.InlineKeyboard))
+	if len(last.Markup.InlineKeyboard) != 3 { // 2 chore buttons + view switch row
+		t.Fatalf("expected 2 chore buttons and a switch row, got: %d", len(last.Markup.InlineKeyboard))
 	}
 
 	// 4. Detail view navigation: Alice taps "🚿 Clean bathroom" (ch:d:<occ1.ID>)
@@ -250,8 +250,8 @@ func TestPrivateList_LongList(t *testing.T) {
 	if last == nil || !strings.Contains(last.Text, "+5 more") {
 		t.Fatalf("expected '+5 more' for 25 items, got: %+v", last)
 	}
-	if len(last.Markup.InlineKeyboard) != 20 {
-		t.Fatalf("expected 20 buttons for capped list, got: %d", len(last.Markup.InlineKeyboard))
+	if len(last.Markup.InlineKeyboard) != 21 { // 20 capped buttons + view switch row
+		t.Fatalf("expected 20 buttons plus switch row for capped list, got: %d", len(last.Markup.InlineKeyboard))
 	}
 }
 

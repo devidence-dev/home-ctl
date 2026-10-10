@@ -13,7 +13,7 @@ type Translator interface {
 
 var (
 	groupCommandNames   = []string{"add", "list", "status", "help"}
-	privateCommandNames = []string{"start", "status", "help"}
+	privateCommandNames = []string{"start", "list", "status", "help"}
 )
 
 // RegisterCommands registers localized command menus with Telegram for the household group and private chats.
@@ -57,6 +57,11 @@ func RegisterCommands(ctx context.Context, client Client, translator Translator,
 			cmds := make([]BotCommand, len(target.commands))
 			for i, name := range target.commands {
 				key := fmt.Sprintf("telegram.commands.%s.description", name)
+				// ponytail: private /list covers chores and reminders only, so it gets its own text
+				// instead of the group wording that also mentions items.
+				if target.scopeName == "private" && name == "list" {
+					key = "telegram.commands.private_list.description"
+				}
 				cmds[i] = BotCommand{
 					Command:     name,
 					Description: translator.T(lang, key),

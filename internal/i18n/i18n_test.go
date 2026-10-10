@@ -170,6 +170,8 @@ func TestFormatDateTime_LocalizedAndTimezoneAware(t *testing.T) {
 		{"today", "en", time.Date(2026, 10, 5, 18, 0, 0, 0, loc), "today at 18:00"},
 		{"tomorrow en", "en", time.Date(2026, 10, 6, 9, 0, 0, 0, loc), "tomorrow at 09:00"},
 		{"tomorrow es", "es", time.Date(2026, 10, 6, 9, 0, 0, 0, loc), "mañana a las 09:00"},
+		{"yesterday en", "en", time.Date(2026, 10, 4, 18, 0, 0, 0, loc), "yesterday at 18:00"},
+		{"yesterday es", "es", time.Date(2026, 10, 4, 18, 0, 0, 0, loc), "ayer a las 18:00"},
 		{"later en", "en", time.Date(2026, 10, 10, 10, 5, 0, 0, loc), "Sat, Oct 10, 10:05"},
 		{"later es", "es", time.Date(2026, 10, 10, 10, 5, 0, 0, loc), "sáb 10 oct, 10:05"},
 		{"other year es", "es", time.Date(2027, 1, 4, 8, 0, 0, 0, loc), "lun 4 ene 2027, 08:00"},

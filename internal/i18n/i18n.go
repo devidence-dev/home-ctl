@@ -39,8 +39,15 @@ var DefaultRequiredKeys = []string{
 	"datetime.full_year",
 	"datetime.today",
 	"datetime.tomorrow",
+	"datetime.yesterday",
 	"telegram.commands.add.description",
 	"telegram.commands.list.description",
+	"telegram.commands.private_list.description",
+	"lists.due",
+	"lists.due_recurring",
+	"lists.overdue",
+	"lists.view_chores",
+	"lists.view_reminders",
 	"telegram.commands.status.description",
 	"telegram.commands.help.description",
 	"telegram.commands.start.description",
@@ -234,7 +241,7 @@ func flattenMap(prefix string, m map[string]interface{}, out map[string]string) 
 }
 
 // FormatDateTime renders t for users of locale in the household timezone loc. Today and tomorrow
-// (relative to now) render as "today at 18:00"; other days use the locale's weekday and month
+// (relative to now) render as "today at 18:00", and yesterday as "yesterday at 18:00"; other days use the locale's weekday and month
 // names, with the year added only when it differs from now's. Names and layouts come from the
 // locale files, so persisted timestamps and domain logic stay locale-independent.
 func (b *Bundle) FormatDateTime(locale string, t, now time.Time, loc *time.Location) string {
@@ -249,6 +256,8 @@ func (b *Bundle) FormatDateTime(locale string, t, now time.Time, loc *time.Locat
 		return b.T(locale, "datetime.today", hhmm)
 	case day.Equal(today.AddDate(0, 0, 1)):
 		return b.T(locale, "datetime.tomorrow", hhmm)
+	case day.Equal(today.AddDate(0, 0, -1)):
+		return b.T(locale, "datetime.yesterday", hhmm)
 	}
 
 	weekday := nameAt(b.T(locale, "datetime.weekdays"), int(lt.Weekday()), 7, lt.Weekday().String()[:3])

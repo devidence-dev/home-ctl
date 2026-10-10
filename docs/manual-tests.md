@@ -18,8 +18,9 @@ Para ver el log en vivo: `docker logs -f homectl`.
 
 - [x] En el grupo, al escribir `/` aparecen `add`, `list`, `status`, `help`.
 - [x] En el grupo no aparece `start`.
-- [x] En el chat privado, al escribir `/` aparecen `start`, `status`, `help`.
-- [x] En el chat privado no aparecen `add` ni `list`.
+- [ ] En el chat privado, al escribir `/` aparecen `start`, `list`, `status`, `help`.
+- [ ] En el chat privado no aparece `add`.
+- [ ] En el chat privado, la descripción de `list` es "Ver tus tareas y recordatorios"; en el grupo sigue siendo "Ver artículos, tareas o recordatorios".
 - [x] Las descripciones salen en el idioma del cliente de Telegram (no depende del `locale` de `users.yaml`).
 
 ## 2. Acceso y onboarding
@@ -76,7 +77,7 @@ Para ver el log en vivo: `docker logs -f homectl`.
 - [ ] **Posponer** → 30m: llega otra notificación después.
 - [ ] **Hecho**: el topic Chores muestra la actualización.
 - [ ] Tarea recurrente: al completarla se genera la siguiente según el intervalo y anclaje configurados.
-- [ ] `/list` en privado muestra tus tareas abiertas (solo tareas).
+- [ ] `/list` en privado muestra tus tareas abiertas (sección 10 para el formato y el cambio de vista).
 
 ## 6. Reminders
 
@@ -93,6 +94,7 @@ Para ver el log en vivo: `docker logs -f homectl`.
 - [ ] **Posponer** detiene las repeticiones.
 - [ ] **Hecho** actualiza el grupo.
 - [ ] Pulsar **Hecho** dos veces no duplica nada.
+- [ ] `/list` en Reminders entrega tus recordatorios en privado con el mismo formato de la sección 10.
 
 ## 7. Persistencia
 
@@ -108,6 +110,17 @@ Para ver el log en vivo: `docker logs -f homectl`.
 
 - [ ] Con un `chat_id` inválido y reinicio, el log muestra el error de registro del menú y el bot sigue funcionando en privado.
 - [ ] Restaurar el `chat_id` correcto y reiniciar.
+
+## 10. Listas privadas
+
+- [ ] `/list` en privado abre la vista de tareas (botón `• 🧹 Tareas` marcado) con el botón `⏰ Recordatorios`.
+- [ ] Pulsar `⏰ Recordatorios` edita el mismo mensaje a la vista de recordatorios; pulsar `🧹 Tareas` vuelve a la de tareas.
+- [ ] Una vista vacía (sin tareas o sin recordatorios) sigue mostrando los botones de cambio.
+- [ ] Cada elemento tiene número, emoji, nombre y una línea con la fecha (`📅 hoy a las 23:05`, `📅 mañana a las 10:00`).
+- [ ] Un elemento recurrente añade la recurrencia en la misma línea (`· 🔁 Cada 2 semanas`); uno de una sola vez no muestra `🔁`.
+- [ ] Un elemento vencido muestra `⚠️ Venció: ayer a las 18:00` en lugar de la línea de fecha.
+- [ ] Los botones son numerados (`1. 🚿 Lavar el baño`) y abren el detalle; Volver regresa a la misma lista.
+- [ ] Con más de 20 elementos, la lista muestra 20 y la línea `+N más` al final.
 
 ## Diagnóstico si algo falla
 

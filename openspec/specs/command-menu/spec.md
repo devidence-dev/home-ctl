@@ -22,15 +22,15 @@ At startup the system SHALL register a command menu scoped only to the configure
 - **THEN** no command menu was registered for that group
 
 ### Requirement: Private command menu
-At startup the system SHALL register a menu for all private chats containing `start`, `status` and `help`. It SHALL NOT advertise `add`, and SHALL NOT advertise `list` while the private `/list` shows only one domain.
+At startup the system SHALL register a menu for all private chats containing `start`, `list`, `status` and `help`, in that order. It SHALL NOT advertise `add`. `list` is advertised because the private `/list` reaches both chores and reminders.
 
 #### Scenario: Private menu
 - **WHEN** the application starts
-- **THEN** the private-chat menu lists start, status, help
+- **THEN** the private-chat menu lists start, list, status, help
 
 #### Scenario: Add not advertised privately
 - **WHEN** the private menu is registered
-- **THEN** it does not contain `add` or `list`
+- **THEN** it does not contain `add`
 
 ### Requirement: Localized command descriptions
 Command descriptions SHALL come from locale resources, command names SHALL be identical in every language, and menus SHALL be registered for language codes `""`, `en` and `es`. The `""` menu SHALL use the default locale's descriptions.

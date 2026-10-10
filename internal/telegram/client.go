@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -127,7 +128,12 @@ func (c *HTTPClient) EditMessageText(ctx context.Context, chatID int64, messageI
 		}
 	}
 
-	return c.call(ctx, "editMessageText", req, nil)
+	err := c.call(ctx, "editMessageText", req, nil)
+	// ponytail: Telegram rejects a re-render with identical content; the view already shows, so it is not a failure.
+	if err != nil && strings.Contains(err.Error(), "message is not modified") {
+		return nil
+	}
+	return err
 }
 
 // EditMessageReplyMarkup replaces only the inline keyboard of an existing message.

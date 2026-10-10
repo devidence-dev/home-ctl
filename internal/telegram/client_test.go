@@ -134,6 +134,21 @@ func TestHTTPClient_EditMessageText(t *testing.T) {
 	}
 }
 
+func TestHTTPClient_EditMessageTextUnchangedIsNoop(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok":          false,
+			"description": "Bad Request: message is not modified: specified new message content and reply markup are exactly the same",
+		})
+	}))
+	defer server.Close()
+
+	client := telegram.NewHTTPClientWithBaseURL(server.URL)
+	if err := client.EditMessageText(context.Background(), 12345, 555, "Same", nil); err != nil {
+		t.Fatalf("re-rendering identical content must not fail, got: %v", err)
+	}
+}
+
 func TestHTTPClient_DeleteMessage(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/deleteMessage" {

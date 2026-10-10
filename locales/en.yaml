@@ -85,6 +85,13 @@ reminders:
   fallback_title: "Reminder"
   prompt_anchor: "Choose recurrence anchor for '%s':"
 
+lists:
+  due: "📅 %s"
+  due_recurring: "📅 %s · 🔁 %s"
+  overdue: "⚠️ Overdue: %s"
+  view_chores: "🧹 Chores"
+  view_reminders: "⏰ Reminders"
+
 general:
   not_member: "You are not an authorized household member."
   flow_expired: "This action has expired. Please start again."
@@ -125,6 +132,7 @@ datetime:
   full_year: "%[1]s, %[3]s %[2]d %[6]d, %02[4]d:%02[5]d"
   today: "today at %s"
   tomorrow: "tomorrow at %s"
+  yesterday: "yesterday at %s"
 
 telegram:
   commands:
@@ -132,6 +140,8 @@ telegram:
       description: "Add an item, chore, or reminder"
     list:
       description: "List items, chores, or reminders"
+    private_list:
+      description: "Show your chores and reminders"
     status:
       description: "Show household member status"
     help:

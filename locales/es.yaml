@@ -85,6 +85,13 @@ reminders:
   fallback_title: "Recordatorio"
   prompt_anchor: "Elige el ancla de recurrencia para '%s':"
 
+lists:
+  due: "📅 %s"
+  due_recurring: "📅 %s · 🔁 %s"
+  overdue: "⚠️ Venció: %s"
+  view_chores: "🧹 Tareas"
+  view_reminders: "⏰ Recordatorios"
+
 general:
   not_member: "No eres un miembro autorizado del hogar."
   flow_expired: "Esta acción ha expirado. Por favor, comienza de nuevo."
@@ -125,6 +132,7 @@ datetime:
   full_year: "%[1]s %[2]d %[3]s %[6]d, %02[4]d:%02[5]d"
   today: "hoy a las %s"
   tomorrow: "mañana a las %s"
+  yesterday: "ayer a las %s"
 
 telegram:
   commands:
@@ -132,6 +140,8 @@ telegram:
       description: "Agregar un artículo, tarea o recordatorio"
     list:
       description: "Ver artículos, tareas o recordatorios"
+    private_list:
+      description: "Ver tus tareas y recordatorios"
     status:
       description: "Mostrar el estado de los miembros del hogar"
     help:

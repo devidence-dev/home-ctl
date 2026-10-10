@@ -58,15 +58,15 @@ func TestRegisterCommands_CommandListsAndScopes(t *testing.T) {
 				t.Errorf("expected private chat ID to be 0, got %d", call.Scope.ChatID)
 			}
 
-			// Private list: start, status, help
+			// Private list: start, list, status, help
 			var names []string
 			for _, cmd := range call.Commands {
 				names = append(names, cmd.Command)
-				if cmd.Command == "add" || cmd.Command == "list" {
-					t.Errorf("private menu must not advertise 'add' or 'list', found %s", cmd.Command)
+				if cmd.Command == "add" {
+					t.Errorf("private menu must not advertise 'add', found %s", cmd.Command)
 				}
 			}
-			expected := []string{"start", "status", "help"}
+			expected := []string{"start", "list", "status", "help"}
 			if len(names) != len(expected) {
 				t.Fatalf("expected %d private commands, got %d (%v)", len(expected), len(names), names)
 			}
@@ -82,6 +82,14 @@ func TestRegisterCommands_CommandListsAndScopes(t *testing.T) {
 }
 
 func TestRegisterCommands_LocalizedDescriptionsAndDefaultLocale(t *testing.T) {
+	// Private /list has its own wording; every other command uses telegram.commands.<name>.
+	descKey := func(scope, name string) string {
+		if scope == "all_private_chats" && name == "list" {
+			return "telegram.commands.private_list.description"
+		}
+		return "telegram.commands." + name + ".description"
+	}
+
 	localesDir := filepath.Join("..", "..", "locales")
 	bundleEN, err := i18n.NewBundle(localesDir, "en", i18n.DefaultRequiredKeys, nil)
 	if err != nil {
@@ -101,14 +109,14 @@ func TestRegisterCommands_LocalizedDescriptionsAndDefaultLocale(t *testing.T) {
 			switch call.LanguageCode {
 			case "en":
 				for _, cmd := range call.Commands {
-					want := bundleEN.T("en", "telegram.commands."+cmd.Command+".description")
+					want := bundleEN.T("en", descKey(call.Scope.Type, cmd.Command))
 					if cmd.Description != want {
 						t.Errorf("en description mismatch for %s: got %q, want %q", cmd.Command, cmd.Description, want)
 					}
 				}
 			case "es":
 				for _, cmd := range call.Commands {
-					want := bundleEN.T("es", "telegram.commands."+cmd.Command+".description")
+					want := bundleEN.T("es", descKey(call.Scope.Type, cmd.Command))
 					if cmd.Description != want {
 						t.Errorf("es description mismatch for %s: got %q, want %q", cmd.Command, cmd.Description, want)
 					}
@@ -116,7 +124,7 @@ func TestRegisterCommands_LocalizedDescriptionsAndDefaultLocale(t *testing.T) {
 			case "":
 				// Fallback must use default locale (en)
 				for _, cmd := range call.Commands {
-					want := bundleEN.T("en", "telegram.commands."+cmd.Command+".description")
+					want := bundleEN.T("en", descKey(call.Scope.Type, cmd.Command))
 					if cmd.Description != want {
 						t.Errorf("fallback description mismatch for %s: got %q, want %q", cmd.Command, cmd.Description, want)
 					}
@@ -137,7 +145,7 @@ func TestRegisterCommands_LocalizedDescriptionsAndDefaultLocale(t *testing.T) {
 			if call.LanguageCode == "" {
 				foundFallback = true
 				for _, cmd := range call.Commands {
-					want := bundleES.T("es", "telegram.commands."+cmd.Command+".description")
+					want := bundleES.T("es", descKey(call.Scope.Type, cmd.Command))
 					if cmd.Description != want {
 						t.Errorf("es fallback description mismatch for %s: got %q, want %q", cmd.Command, cmd.Description, want)
 					}

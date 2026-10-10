@@ -90,66 +90,115 @@ func (r *Router) sendPrivateRemindersList(ctx context.Context, member *household
 	return err
 }
 
-func (r *Router) formatChoresList(locale string, res chores.ListResult) (string, *InlineKeyboardMarkup) {
-	if len(res.Occurrences) == 0 {
-		return r.i18n.T(locale, "chores.list_empty"), &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{}}
-	}
+// listItem is one entry of a private list, resolved from its domain.
+type listItem struct {
+	emoji, name, recurrence, callback string
+	dueAt                             time.Time
+}
 
+// listViewSwitch is the row that moves a private list between chores ("ch") and reminders ("re").
+// The current view is marked; its button re-renders the same view.
+func (r *Router) listViewSwitch(locale, view string) []InlineKeyboardButton {
+	chores := r.i18n.T(locale, "lists.view_chores")
+	reminders := r.i18n.T(locale, "lists.view_reminders")
+	if view == "ch" {
+		chores = "• " + chores
+	} else {
+		reminders = "• " + reminders
+	}
+	return []InlineKeyboardButton{
+		{Text: chores, CallbackData: "list:ch"},
+		{Text: reminders, CallbackData: "list:re"},
+	}
+}
+
+// renderPrivateList renders the title, every entry in the body and one numbered button per entry,
+// followed by the view switch. The "+N more" line closes the body.
+func (r *Router) renderPrivateList(locale, view, title string, remaining int, items []listItem) (string, *InlineKeyboardMarkup) {
 	var sb strings.Builder
-	sb.WriteString(r.i18n.T(locale, "chores.list_title"))
-	if res.RemainingCount > 0 {
-		sb.WriteString("\n")
-		sb.WriteString(r.i18n.T(locale, "chores.remaining_count", res.RemainingCount))
-	}
-
-	var rows [][]InlineKeyboardButton
-	for _, occ := range res.Occurrences {
-		name := r.i18n.T(locale, "chores.fallback_name")
-		emoji := "🧹"
-		if occ.Definition != nil {
-			name = occ.Definition.Name
-			emoji = occ.Definition.Emoji
-		}
+	sb.WriteString(title)
+	rows := [][]InlineKeyboardButton{}
+	for i, item := range items {
+		n := i + 1
+		sb.WriteString("\n\n")
+		sb.WriteString(r.renderListEntry(locale, n, item))
 		rows = append(rows, []InlineKeyboardButton{
-			{
-				Text:         fmt.Sprintf("%s %s", emoji, name),
-				CallbackData: fmt.Sprintf("ch:d:%d", occ.ID),
-			},
+			{Text: fmt.Sprintf("%d. %s %s", n, item.emoji, item.name), CallbackData: item.callback},
 		})
 	}
-
+	if remaining > 0 {
+		sb.WriteString("\n\n")
+		sb.WriteString(r.i18n.T(locale, "chores.remaining_count", remaining))
+	}
+	rows = append(rows, r.listViewSwitch(locale, view))
 	return sb.String(), &InlineKeyboardMarkup{InlineKeyboard: rows}
+}
+
+// renderListEntry renders "n. emoji name" and, below it, the due date with recurrence or the overdue marker.
+func (r *Router) renderListEntry(locale string, n int, item listItem) string {
+	date := r.formatDateTime(locale, item.dueAt)
+	detail := r.i18n.T(locale, "lists.due", date)
+	switch {
+	case item.dueAt.Before(r.clock.Now()):
+		detail = r.i18n.T(locale, "lists.overdue", date)
+	case item.recurrence != "":
+		detail = r.i18n.T(locale, "lists.due_recurring", date, item.recurrence)
+	}
+	return fmt.Sprintf("%d. %s %s\n%s", n, item.emoji, item.name, detail)
+}
+
+// listRecurrence returns the recurrence summary, or "" for a one-time definition.
+func (r *Router) listRecurrence(locale string, interval *int, unit *string) string {
+	if interval == nil || unit == nil {
+		return ""
+	}
+	return r.recurrenceSummary(locale, *interval, *unit, nil)
+}
+
+func (r *Router) formatChoresList(locale string, res chores.ListResult) (string, *InlineKeyboardMarkup) {
+	if len(res.Occurrences) == 0 {
+		return r.i18n.T(locale, "chores.list_empty"), &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{r.listViewSwitch(locale, "ch")}}
+	}
+
+	items := make([]listItem, 0, len(res.Occurrences))
+	for _, occ := range res.Occurrences {
+		item := listItem{
+			emoji:    "🧹",
+			name:     r.i18n.T(locale, "chores.fallback_name"),
+			callback: fmt.Sprintf("ch:d:%d", occ.ID),
+			dueAt:    occ.DueAt,
+		}
+		if occ.Definition != nil {
+			item.name = occ.Definition.Name
+			item.emoji = occ.Definition.Emoji
+			item.recurrence = r.listRecurrence(locale, occ.Definition.RecurrenceInterval, occ.Definition.RecurrenceUnit)
+		}
+		items = append(items, item)
+	}
+	return r.renderPrivateList(locale, "ch", r.i18n.T(locale, "chores.list_title"), res.RemainingCount, items)
 }
 
 func (r *Router) formatRemindersList(locale string, res reminders.ListResult) (string, *InlineKeyboardMarkup) {
 	if len(res.Occurrences) == 0 {
-		return r.i18n.T(locale, "reminders.list_empty"), &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{}}
+		return r.i18n.T(locale, "reminders.list_empty"), &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{r.listViewSwitch(locale, "re")}}
 	}
 
-	var sb strings.Builder
-	sb.WriteString(r.i18n.T(locale, "reminders.list_title"))
-	if res.RemainingCount > 0 {
-		sb.WriteString("\n")
-		sb.WriteString(r.i18n.T(locale, "chores.remaining_count", res.RemainingCount))
-	}
-
-	var rows [][]InlineKeyboardButton
+	items := make([]listItem, 0, len(res.Occurrences))
 	for _, occ := range res.Occurrences {
-		title := r.i18n.T(locale, "reminders.fallback_title")
-		emoji := "⏰"
-		if occ.Definition != nil {
-			title = occ.Definition.Title
-			emoji = occ.Definition.Emoji
+		item := listItem{
+			emoji:    "⏰",
+			name:     r.i18n.T(locale, "reminders.fallback_title"),
+			callback: fmt.Sprintf("re:d:%d", occ.ID),
+			dueAt:    occ.DueAt,
 		}
-		rows = append(rows, []InlineKeyboardButton{
-			{
-				Text:         fmt.Sprintf("%s %s", emoji, title),
-				CallbackData: fmt.Sprintf("re:d:%d", occ.ID),
-			},
-		})
+		if occ.Definition != nil {
+			item.name = occ.Definition.Title
+			item.emoji = occ.Definition.Emoji
+			item.recurrence = r.listRecurrence(locale, occ.Definition.RecurrenceInterval, occ.Definition.RecurrenceUnit)
+		}
+		items = append(items, item)
 	}
-
-	return sb.String(), &InlineKeyboardMarkup{InlineKeyboard: rows}
+	return r.renderPrivateList(locale, "re", r.i18n.T(locale, "reminders.list_title"), res.RemainingCount, items)
 }
 
 func (r *Router) handleChoreCallback(ctx context.Context, member *household.Member, cq *CallbackQuery, parsed *ParsedCallback) error {
