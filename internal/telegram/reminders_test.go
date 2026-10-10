@@ -79,16 +79,21 @@ func TestRemindersFlow_OneOff(t *testing.T) {
 	if err := env.router.HandleUpdate(ctx, uTitle); err != nil {
 		t.Fatalf("title text failed: %v", err)
 	}
-	lastEdit := env.client.LastEdited()
-	if lastEdit == nil || lastEdit.MessageID != flowMsgID || !strings.Contains(lastEdit.Text, "reminder is for") {
-		t.Fatalf("expected target prompt on message %d, got: %+v", flowMsgID, lastEdit)
+	// A typed title re-anchors: the target step is a new message below the text and the title prompt is deleted.
+	lastSent := env.client.LastSent()
+	if lastSent == nil || lastSent.MessageID == flowMsgID || !strings.Contains(lastSent.Text, "reminder is for") {
+		t.Fatalf("expected target prompt as a new message after the typed title, got: %+v", lastSent)
 	}
+	if deleted := env.client.DeletedMessages(); len(deleted) != 1 || deleted[0] != flowMsgID {
+		t.Fatalf("expected title prompt %d deleted, got %v", flowMsgID, deleted)
+	}
+	flowMsgID = lastSent.MessageID // the active flow message from here on
 
 	// 3. Alice selects Bob (102) as target
 	if err := pressReminderCallback(ctx, env, 3, 101, "fl:usr:102"); err != nil {
 		t.Fatalf("target callback failed: %v", err)
 	}
-	lastEdit = env.client.LastEdited()
+	lastEdit := env.client.LastEdited()
 	if lastEdit == nil || lastEdit.MessageID != flowMsgID || !strings.Contains(lastEdit.Text, "recurrence type") {
 		t.Fatalf("expected recurrence prompt on message %d, got: %+v", flowMsgID, lastEdit)
 	}
@@ -138,9 +143,9 @@ func TestRemindersFlow_OneOff(t *testing.T) {
 		t.Fatalf("expected closed keyboard after confirm, got: %+v", lastEdit)
 	}
 
-	// Assert exactly 1 message was sent through the whole creation flow
-	if len(env.client.SentMessages()) != 1 {
-		t.Fatalf("expected exactly 1 message sent, got %d", len(env.client.SentMessages()))
+	// Two messages: the initial prompt, then the step re-anchored below the typed answer; button steps edit that one
+	if len(env.client.SentMessages()) != 2 {
+		t.Fatalf("expected 2 messages sent, got %d", len(env.client.SentMessages()))
 	}
 	// Assert all edits targeted the same flowMsgID
 	for _, em := range env.client.EditedMessages() {
@@ -188,9 +193,6 @@ func TestRemindersFlow_DailyEvery2Days(t *testing.T) {
 			From: &telegram.User{ID: 101, FirstName: "Alice"}, Text: "/add",
 		},
 	})
-	initialMsg := env.client.LastSent()
-	flowMsgID := initialMsg.MessageID
-
 	_ = env.router.HandleUpdate(ctx, telegram.Update{
 		UpdateID: 2,
 		Message: &telegram.Message{
@@ -199,6 +201,8 @@ func TestRemindersFlow_DailyEvery2Days(t *testing.T) {
 			From: &telegram.User{ID: 101, FirstName: "Alice"}, Text: "Take vitamins",
 		},
 	})
+	// The typed title re-anchored the flow: the target step is the active message from here on.
+	flowMsgID := env.client.LastSent().MessageID
 	_ = pressReminderCallback(ctx, env, 3, 101, "fl:usr:102") // Bob
 	_ = pressReminderCallback(ctx, env, 4, 101, "fl:rt:daily")
 	_ = pressReminderCallback(ctx, env, 5, 101, "fl:iv:2")
@@ -208,9 +212,9 @@ func TestRemindersFlow_DailyEvery2Days(t *testing.T) {
 	_ = pressReminderCallback(ctx, env, 9, 101, "fl:anc:scheduled")
 	_ = pressReminderCallback(ctx, env, 10, 101, "fl:ok")
 
-	// Verify one message throughout
-	if len(env.client.SentMessages()) != 1 {
-		t.Fatalf("expected exactly 1 message sent, got %d", len(env.client.SentMessages()))
+	// Verify one message throughout the button steps: the title prompt, then the target prompt sent below the typed title
+	if len(env.client.SentMessages()) != 2 {
+		t.Fatalf("expected 2 messages sent (title prompt, then target prompt), got %d", len(env.client.SentMessages()))
 	}
 	for _, em := range env.client.EditedMessages() {
 		if em.MessageID != flowMsgID {

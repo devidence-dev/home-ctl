@@ -194,14 +194,15 @@ func (r *Router) handleShoppingFlowText(ctx context.Context, member *household.M
 		}
 		payload := shoppingNewItemPayload{Name: text}
 		_ = r.flow.Set(ctx, flowKey, "shopping_new_emoji", payload, r.cfg.FlowTTL)
-		st, _ := r.flow.Get(ctx, flowKey, nil)
 		prompt := r.i18n.T(locale, "shopping.prompt_new_item_emoji")
 		markup := &InlineKeyboardMarkup{
 			InlineKeyboard: [][]InlineKeyboardButton{
 				{{Text: r.i18n.T(locale, "buttons.cancel"), CallbackData: "fl:c"}},
 			},
 		}
-		return r.showFlowMessage(ctx, st, prompt, markup, true)
+		return r.reanchorFlow(ctx, state, func() error {
+			return r.showFlowMessage(ctx, state, prompt, markup, true)
+		})
 
 	case "shopping_new_emoji":
 		var payload shoppingNewItemPayload

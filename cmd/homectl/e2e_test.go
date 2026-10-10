@@ -93,6 +93,14 @@ func (f *fakeTG) EditMessageText(_ context.Context, chatID int64, messageID int6
 	return nil
 }
 
+func (f *fakeTG) EditMessageReplyMarkup(_ context.Context, _ int64, _ int64, _ *telegram.InlineKeyboardMarkup) error {
+	return nil
+}
+
+func (f *fakeTG) DeleteMessage(_ context.Context, _ int64, _ int64) error {
+	return nil
+}
+
 func (f *fakeTG) AnswerCallbackQuery(_ context.Context, callbackQueryID string, text string, showAlert bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -517,6 +525,8 @@ func TestEndToEnd_WorkflowsWithRestart(t *testing.T) {
 			Text:            "2026-10-12 10:00",
 		},
 	})
+	// The typed date re-anchors the flow below the user's text: later button presses target the new message.
+	choreMenu = client.LastSent()
 	// Scheduled anchor
 	_ = router.HandleUpdate(ctx, telegram.Update{
 		UpdateID: 18,
@@ -676,6 +686,8 @@ func TestEndToEnd_WorkflowsWithRestart(t *testing.T) {
 			Text:            "2026-10-16 10:00",
 		},
 	})
+	// The typed date re-anchors the flow: the confirmation is the active message from here on.
+	reminderMenu = client.LastSent()
 	// Confirm
 	_ = router.HandleUpdate(ctx, telegram.Update{
 		UpdateID: 26,

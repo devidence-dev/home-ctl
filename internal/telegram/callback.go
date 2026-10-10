@@ -245,7 +245,7 @@ func ParseCallbackData(data string, actorID int64) (*ParsedCallback, error) {
 			return nil, ErrMalformedCallback
 		}
 		d := parts[2]
-		if d == "today" || d == "tomorrow" || d == "type" {
+		if d == "today" || d == "tomorrow" || d == "type" || d == "back" {
 			return &ParsedCallback{Kind: CallbackFlowDate, Payload: d, ActorID: actorID}, nil
 		}
 		dParts := strings.Split(d, "-")

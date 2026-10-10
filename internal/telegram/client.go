@@ -13,6 +13,8 @@ import (
 type Client interface {
 	SendMessage(ctx context.Context, chatID int64, text string, opts *SendOptions) (int64, error)
 	EditMessageText(ctx context.Context, chatID int64, messageID int64, text string, opts *EditOptions) error
+	EditMessageReplyMarkup(ctx context.Context, chatID int64, messageID int64, markup *InlineKeyboardMarkup) error
+	DeleteMessage(ctx context.Context, chatID int64, messageID int64) error
 	AnswerCallbackQuery(ctx context.Context, callbackQueryID string, text string, showAlert bool) error
 	GetUpdates(ctx context.Context, offset int64, timeout int) ([]Update, error)
 	SetMyCommands(ctx context.Context, scope BotCommandScope, languageCode string, commands []BotCommand) error
@@ -126,6 +128,25 @@ func (c *HTTPClient) EditMessageText(ctx context.Context, chatID int64, messageI
 	}
 
 	return c.call(ctx, "editMessageText", req, nil)
+}
+
+// EditMessageReplyMarkup replaces only the inline keyboard of an existing message.
+func (c *HTTPClient) EditMessageReplyMarkup(ctx context.Context, chatID int64, messageID int64, markup *InlineKeyboardMarkup) error {
+	req := map[string]interface{}{
+		"chat_id":      chatID,
+		"message_id":   messageID,
+		"reply_markup": markup,
+	}
+	return c.call(ctx, "editMessageReplyMarkup", req, nil)
+}
+
+// DeleteMessage deletes a message from a chat or topic.
+func (c *HTTPClient) DeleteMessage(ctx context.Context, chatID int64, messageID int64) error {
+	req := map[string]interface{}{
+		"chat_id":    chatID,
+		"message_id": messageID,
+	}
+	return c.call(ctx, "deleteMessage", req, nil)
 }
 
 // AnswerCallbackQuery answers an inline keyboard callback query.

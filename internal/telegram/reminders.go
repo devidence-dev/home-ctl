@@ -31,6 +31,11 @@ type reminderFlowPayload struct {
 	CalMonth           int       `json:"cal_month,omitempty"`
 }
 
+// reminderContext returns the values already chosen, shown as the header of each step after the title.
+func reminderContext(p reminderFlowPayload) PickerContext {
+	return PickerContext{Emoji: p.Emoji, Title: p.Title, Person: p.TargetUserName, Date: p.DueDate}
+}
+
 func (r *Router) handleRemindersAdd(ctx context.Context, member *household.Member, msg *Message) error {
 	locale := member.Locale
 	if locale == "" {
@@ -49,7 +54,7 @@ func (r *Router) handleRemindersAdd(ctx context.Context, member *household.Membe
 	return r.showFlowMessage(ctx, st, prompt, r.cancelOnlyMarkup(locale), true)
 }
 
-func (r *Router) promptReminderTarget(ctx context.Context, state *flow.State, locale string) error {
+func (r *Router) promptReminderTarget(ctx context.Context, state *flow.State, locale string, payload reminderFlowPayload) error {
 	members, err := r.household.ListActiveMembers(ctx)
 	if err != nil {
 		return err
@@ -70,17 +75,17 @@ func (r *Router) promptReminderTarget(ctx context.Context, state *flow.State, lo
 	})
 
 	prompt := r.i18n.T(locale, "reminders.prompt_target")
-	return r.showFlowMessage(ctx, state, prompt, &InlineKeyboardMarkup{InlineKeyboard: rows})
+	return r.showFlowMessage(ctx, state, r.flowStepText(locale, reminderContext(payload), prompt), &InlineKeyboardMarkup{InlineKeyboard: rows})
 }
 
-func (r *Router) promptReminderRecurrenceType(ctx context.Context, state *flow.State, locale string) error {
+func (r *Router) promptReminderRecurrenceType(ctx context.Context, state *flow.State, locale string, payload reminderFlowPayload) error {
 	prompt, markup := RenderRecurrenceTypeStep(r.i18n, locale)
-	return r.showFlowMessage(ctx, state, prompt, markup)
+	return r.showFlowMessage(ctx, state, r.flowStepText(locale, reminderContext(payload), prompt), markup)
 }
 
 func (r *Router) promptReminderInterval(ctx context.Context, state *flow.State, locale string, payload reminderFlowPayload) error {
 	prompt, markup := RenderIntervalStep(r.i18n, locale, payload.RecurrenceType)
-	return r.showFlowMessage(ctx, state, prompt, markup)
+	return r.showFlowMessage(ctx, state, r.flowStepText(locale, reminderContext(payload), prompt), markup)
 }
 
 func (r *Router) promptReminderDate(ctx context.Context, state *flow.State, locale string, payload *reminderFlowPayload) error {
@@ -90,22 +95,23 @@ func (r *Router) promptReminderDate(ctx context.Context, state *flow.State, loca
 		payload.CalMonth = int(now.Month())
 	}
 	prompt, markup := RenderCalendarStep(r.i18n, locale, payload.CalYear, time.Month(payload.CalMonth), now, r.clock.Location())
-	return r.showFlowMessage(ctx, state, prompt, markup)
+	return r.showFlowMessage(ctx, state, r.flowStepText(locale, reminderContext(*payload), prompt), markup)
 }
 
-func (r *Router) promptReminderHour(ctx context.Context, state *flow.State, locale string) error {
-	prompt, markup := RenderHourStep(r.i18n, locale)
-	return r.showFlowMessage(ctx, state, prompt, markup)
+// promptReminderHour shows the hour step; notice explains a rejected time and may be empty.
+func (r *Router) promptReminderHour(ctx context.Context, state *flow.State, locale string, payload reminderFlowPayload, notice string) error {
+	prompt, markup := RenderHourStep(r.i18n, locale, payload.DueDate, r.clock.Now(), r.clock.Location())
+	return r.showFlowMessage(ctx, state, r.flowStepText(locale, reminderContext(payload), notice, prompt), markup)
 }
 
-func (r *Router) promptReminderMinute(ctx context.Context, state *flow.State, locale string) error {
-	prompt, markup := RenderMinuteStep(r.i18n, locale)
-	return r.showFlowMessage(ctx, state, prompt, markup)
+func (r *Router) promptReminderMinute(ctx context.Context, state *flow.State, locale string, payload reminderFlowPayload) error {
+	prompt, markup := RenderMinuteStep(r.i18n, locale, payload.DueDate, payload.DueHour, r.clock.Now(), r.clock.Location())
+	return r.showFlowMessage(ctx, state, r.flowStepText(locale, reminderContext(payload), prompt), markup)
 }
 
-func (r *Router) promptReminderAnchor(ctx context.Context, state *flow.State, locale string) error {
+func (r *Router) promptReminderAnchor(ctx context.Context, state *flow.State, locale string, payload reminderFlowPayload) error {
 	prompt, markup := RenderAnchorStep(r.i18n, locale)
-	return r.showFlowMessage(ctx, state, prompt, markup)
+	return r.showFlowMessage(ctx, state, r.flowStepText(locale, reminderContext(payload), prompt), markup)
 }
 
 func (r *Router) promptReminderConfirm(ctx context.Context, state *flow.State, locale string, payload reminderFlowPayload) error {
@@ -129,20 +135,17 @@ func (r *Router) promptReminderConfirm(ctx context.Context, state *flow.State, l
 		anchor = *payload.RecurrenceAnchor
 	}
 
-	prompt, markup := RenderConfirmationStep(
-		r.i18n,
-		locale,
-		payload.Title,
-		r.i18n.T(locale, "picker.summary_target"),
-		payload.TargetUserName,
-		payload.DueAt,
-		recType,
-		interval,
-		anchor,
-		r.clock.Now(),
-		r.clock.Location(),
-	)
-	return r.showFlowMessage(ctx, state, prompt, markup)
+	prompt, markup := RenderConfirmationStep(r.i18n, locale, ConfirmationSummary{
+		Emoji:       payload.Emoji,
+		Title:       payload.Title,
+		PersonLabel: "picker.summary_target",
+		PersonName:  payload.TargetUserName,
+		DueAt:       payload.DueAt,
+		RecType:     recType,
+		Interval:    interval,
+		Anchor:      anchor,
+	}, r.clock.Now(), r.clock.Location())
+	return r.showFlowMessage(ctx, state, r.flowStepText(locale, reminderContext(payload), prompt), markup)
 }
 
 func (r *Router) handleRemindersFlowText(ctx context.Context, member *household.Member, msg *Message, state *flow.State) error {
@@ -157,6 +160,7 @@ func (r *Router) handleRemindersFlowText(ctx context.Context, member *household.
 	var payload reminderFlowPayload
 	_ = json.Unmarshal(state.Payload, &payload)
 
+	// Typed answers, accepted or rejected, re-anchor the flow below the user's message.
 	switch state.Step {
 	case "reminder_title":
 		if text == "" {
@@ -165,29 +169,33 @@ func (r *Router) handleRemindersFlowText(ctx context.Context, member *household.
 		payload.Title = text
 		payload.Emoji = "⏰"
 		_ = r.flow.Set(ctx, flowKey, "reminder_target", payload, r.cfg.FlowTTL)
-		return r.promptReminderTarget(ctx, state, locale)
+		return r.reanchorFlow(ctx, state, func() error {
+			return r.promptReminderTarget(ctx, state, locale, payload)
+		})
 
 	case "reminder_typed_interval":
 		n, err := ValidateTypedInterval(text)
 		if err != nil {
-			guidance := r.i18n.T(locale, "picker.invalid_interval") + "\n\n" + r.i18n.T(locale, "picker.prompt_type_interval")
-			return r.showFlowMessage(ctx, state, guidance, r.cancelOnlyMarkup(locale))
+			return r.reanchorRejected(ctx, state, locale, reminderContext(payload),
+				r.i18n.T(locale, "picker.invalid_interval"), r.i18n.T(locale, "picker.prompt_type_interval"))
 		}
 		payload.RecurrenceInterval = &n
 		_ = r.flow.Set(ctx, flowKey, "reminder_date", payload, r.cfg.FlowTTL)
-		return r.promptReminderDate(ctx, state, locale, &payload)
+		return r.reanchorFlow(ctx, state, func() error {
+			return r.promptReminderDate(ctx, state, locale, &payload)
+		})
 
 	case "reminder_typed_date":
 		dateOnly, dateTime, isDateTime, err := r.parseTypedDateOrTime(text)
 		if err != nil {
-			guidance := r.i18n.T(locale, "general.invalid_date_format") + "\n\n" + r.i18n.T(locale, "picker.prompt_type_date")
-			return r.showFlowMessage(ctx, state, guidance, r.cancelOnlyMarkup(locale))
+			return r.reanchorRejected(ctx, state, locale, reminderContext(payload),
+				r.i18n.T(locale, "general.invalid_date_format"), r.i18n.T(locale, "picker.prompt_type_date"))
 		}
 		if isDateTime {
 			now := r.clock.Now().In(r.clock.Location())
 			if !dateTime.After(now) {
-				guidance := r.i18n.T(locale, "general.past_due_time") + "\n\n" + r.i18n.T(locale, "picker.prompt_type_date")
-				return r.showFlowMessage(ctx, state, guidance, r.cancelOnlyMarkup(locale))
+				return r.reanchorRejected(ctx, state, locale, reminderContext(payload),
+					r.i18n.T(locale, "general.past_due_time"), r.i18n.T(locale, "picker.prompt_type_date"))
 			}
 			payload.DueAt = dateTime
 			payload.DueDate = dateTime.Format("2006-01-02")
@@ -197,20 +205,26 @@ func (r *Router) handleRemindersFlowText(ctx context.Context, member *household.
 			isRecurring := payload.RecurrenceType != "" && payload.RecurrenceType != "once"
 			if isRecurring {
 				_ = r.flow.Set(ctx, flowKey, "reminder_anchor", payload, r.cfg.FlowTTL)
-				return r.promptReminderAnchor(ctx, state, locale)
+				return r.reanchorFlow(ctx, state, func() error {
+					return r.promptReminderAnchor(ctx, state, locale, payload)
+				})
 			}
 			_ = r.flow.Set(ctx, flowKey, "reminder_confirm", payload, r.cfg.FlowTTL)
-			return r.promptReminderConfirm(ctx, state, locale, payload)
+			return r.reanchorFlow(ctx, state, func() error {
+				return r.promptReminderConfirm(ctx, state, locale, payload)
+			})
 		}
 		payload.DueDate = dateOnly
 		_ = r.flow.Set(ctx, flowKey, "reminder_hour", payload, r.cfg.FlowTTL)
-		return r.promptReminderHour(ctx, state, locale)
+		return r.reanchorFlow(ctx, state, func() error {
+			return r.promptReminderHour(ctx, state, locale, payload, "")
+		})
 
 	case "reminder_typed_minute":
 		m, err := ValidateTypedMinute(text)
 		if err != nil {
-			guidance := r.i18n.T(locale, "picker.invalid_minute") + "\n\n" + r.i18n.T(locale, "picker.prompt_type_minute")
-			return r.showFlowMessage(ctx, state, guidance, r.cancelOnlyMarkup(locale))
+			return r.reanchorRejected(ctx, state, locale, reminderContext(payload),
+				r.i18n.T(locale, "picker.invalid_minute"), r.i18n.T(locale, "picker.prompt_type_minute"))
 		}
 		loc := r.clock.Location()
 		dateT, _ := time.ParseInLocation("2006-01-02", payload.DueDate, loc)
@@ -220,9 +234,9 @@ func (r *Router) handleRemindersFlowText(ctx context.Context, member *household.
 			payload.DueHour = 0
 			payload.DueMinute = 0
 			_ = r.flow.Set(ctx, flowKey, "reminder_hour", payload, r.cfg.FlowTTL)
-			hourPrompt, hourMarkup := RenderHourStep(r.i18n, locale)
-			hourPrompt = r.i18n.T(locale, "general.past_due_time") + "\n\n" + hourPrompt
-			return r.showFlowMessage(ctx, state, hourPrompt, hourMarkup)
+			return r.reanchorFlow(ctx, state, func() error {
+				return r.promptReminderHour(ctx, state, locale, payload, r.i18n.T(locale, "picker.time_passed"))
+			})
 		}
 		payload.DueAt = dueAt
 		payload.DueMinute = m
@@ -230,10 +244,14 @@ func (r *Router) handleRemindersFlowText(ctx context.Context, member *household.
 		isRecurring := payload.RecurrenceType != "" && payload.RecurrenceType != "once"
 		if isRecurring {
 			_ = r.flow.Set(ctx, flowKey, "reminder_anchor", payload, r.cfg.FlowTTL)
-			return r.promptReminderAnchor(ctx, state, locale)
+			return r.reanchorFlow(ctx, state, func() error {
+				return r.promptReminderAnchor(ctx, state, locale, payload)
+			})
 		}
 		_ = r.flow.Set(ctx, flowKey, "reminder_confirm", payload, r.cfg.FlowTTL)
-		return r.promptReminderConfirm(ctx, state, locale, payload)
+		return r.reanchorFlow(ctx, state, func() error {
+			return r.promptReminderConfirm(ctx, state, locale, payload)
+		})
 	}
 
 	return nil
@@ -272,7 +290,7 @@ func (r *Router) handleRemindersFlowCallback(ctx context.Context, member *househ
 		}
 		_ = r.client.AnswerCallbackQuery(ctx, cq.ID, "", false)
 		_ = r.flow.Set(ctx, flowKey, "reminder_recurrence_type", payload, r.cfg.FlowTTL)
-		return r.promptReminderRecurrenceType(ctx, state, locale)
+		return r.promptReminderRecurrenceType(ctx, state, locale, payload)
 
 	case CallbackFlowRecurrenceType:
 		_ = r.client.AnswerCallbackQuery(ctx, cq.ID, "", false)
@@ -302,7 +320,7 @@ func (r *Router) handleRemindersFlowCallback(ctx context.Context, member *househ
 		if parsed.Payload == "o" {
 			_ = r.flow.Set(ctx, flowKey, "reminder_typed_interval", payload, r.cfg.FlowTTL)
 			prompt := r.i18n.T(locale, "picker.prompt_type_interval")
-			return r.showFlowMessage(ctx, state, prompt, r.cancelOnlyMarkup(locale))
+			return r.showFlowMessage(ctx, state, r.flowStepText(locale, reminderContext(payload), prompt), r.cancelOnlyMarkup(locale))
 		}
 		n := int(parsed.TargetID)
 		payload.RecurrenceInterval = &n
@@ -328,7 +346,16 @@ func (r *Router) handleRemindersFlowCallback(ctx context.Context, member *househ
 		case "type":
 			_ = r.flow.Set(ctx, flowKey, "reminder_typed_date", payload, r.cfg.FlowTTL)
 			prompt := r.i18n.T(locale, "picker.prompt_type_date")
-			return r.showFlowMessage(ctx, state, prompt, r.cancelOnlyMarkup(locale))
+			return r.showFlowMessage(ctx, state, r.flowStepText(locale, reminderContext(payload), prompt), r.cancelOnlyMarkup(locale))
+		case "back":
+			// Change date: back to the calendar on the chosen month, other choices kept.
+			if day, err := time.ParseInLocation("2006-01-02", payload.DueDate, r.clock.Location()); err == nil {
+				payload.CalYear = day.Year()
+				payload.CalMonth = int(day.Month())
+			}
+			payload.DueDate = ""
+			_ = r.flow.Set(ctx, flowKey, "reminder_date", payload, r.cfg.FlowTTL)
+			return r.promptReminderDate(ctx, state, locale, &payload)
 		case "today":
 			payload.DueDate = nowInLoc.Format("2006-01-02")
 		case "tomorrow":
@@ -337,42 +364,41 @@ func (r *Router) handleRemindersFlowCallback(ctx context.Context, member *househ
 			payload.DueDate = parsed.Payload
 		}
 		_ = r.flow.Set(ctx, flowKey, "reminder_hour", payload, r.cfg.FlowTTL)
-		return r.promptReminderHour(ctx, state, locale)
+		return r.promptReminderHour(ctx, state, locale, payload, "")
 
 	case CallbackFlowHour:
 		_ = r.client.AnswerCallbackQuery(ctx, cq.ID, "", false)
 		payload.DueHour = int(parsed.TargetID)
 		_ = r.flow.Set(ctx, flowKey, "reminder_minute", payload, r.cfg.FlowTTL)
-		return r.promptReminderMinute(ctx, state, locale)
+		return r.promptReminderMinute(ctx, state, locale, payload)
 
 	case CallbackFlowMinute:
 		if parsed.Payload == "o" {
 			_ = r.client.AnswerCallbackQuery(ctx, cq.ID, "", false)
 			_ = r.flow.Set(ctx, flowKey, "reminder_typed_minute", payload, r.cfg.FlowTTL)
 			prompt := r.i18n.T(locale, "picker.prompt_type_minute")
-			return r.showFlowMessage(ctx, state, prompt, r.cancelOnlyMarkup(locale))
+			return r.showFlowMessage(ctx, state, r.flowStepText(locale, reminderContext(payload), prompt), r.cancelOnlyMarkup(locale))
 		}
 		minute := int(parsed.TargetID)
 		loc := r.clock.Location()
 		dateT, _ := time.ParseInLocation("2006-01-02", payload.DueDate, loc)
 		dueAt := time.Date(dateT.Year(), dateT.Month(), dateT.Day(), payload.DueHour, minute, 0, 0, loc)
 		now := r.clock.Now().In(loc)
+		_ = r.client.AnswerCallbackQuery(ctx, cq.ID, "", false)
 		if !dueAt.After(now) {
-			_ = r.client.AnswerCallbackQuery(ctx, cq.ID, r.i18n.T(locale, "general.past_due_time"), true)
+			// The minute passed between rendering and pressing: explain it in the message.
 			payload.DueHour = 0
 			payload.DueMinute = 0
 			_ = r.flow.Set(ctx, flowKey, "reminder_hour", payload, r.cfg.FlowTTL)
-			hourPrompt, hourMarkup := RenderHourStep(r.i18n, locale)
-			return r.showFlowMessage(ctx, state, hourPrompt, hourMarkup)
+			return r.promptReminderHour(ctx, state, locale, payload, r.i18n.T(locale, "picker.time_passed"))
 		}
-		_ = r.client.AnswerCallbackQuery(ctx, cq.ID, "", false)
 		payload.DueAt = dueAt
 		payload.DueMinute = minute
 
 		isRecurring := payload.RecurrenceType != "" && payload.RecurrenceType != "once"
 		if isRecurring {
 			_ = r.flow.Set(ctx, flowKey, "reminder_anchor", payload, r.cfg.FlowTTL)
-			return r.promptReminderAnchor(ctx, state, locale)
+			return r.promptReminderAnchor(ctx, state, locale, payload)
 		}
 		_ = r.flow.Set(ctx, flowKey, "reminder_confirm", payload, r.cfg.FlowTTL)
 		return r.promptReminderConfirm(ctx, state, locale, payload)

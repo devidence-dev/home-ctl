@@ -39,7 +39,7 @@ func (r *Router) userErrorText(locale string, err error) string {
 
 // recurrenceSummary renders "every N unit" (plus the anchor when given) from locale resources.
 func (r *Router) recurrenceSummary(locale string, interval int, unit string, anchor *string) string {
-	text := r.i18n.T(locale, "general.recurrence_every_"+unit, interval)
+	text := RecurrenceText(r.i18n, locale, interval, unit)
 	if anchor != nil {
 		text += " (" + r.i18n.T(locale, "buttons.anchor_"+*anchor) + ")"
 	}

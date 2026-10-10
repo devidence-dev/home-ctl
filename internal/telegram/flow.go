@@ -74,6 +74,59 @@ func (r *Router) showFlowMessage(ctx context.Context, state *flow.State, text st
 	return nil
 }
 
+// reanchorFlow shows a step below the user's typed answer. render sends the step as a new flow
+// message (state.MessageID is cleared first), then the previous flow message is retired.
+func (r *Router) reanchorFlow(ctx context.Context, state *flow.State, render func() error) error {
+	prevID := state.MessageID
+	state.MessageID = 0
+	if err := render(); err != nil {
+		state.MessageID = prevID
+		return err
+	}
+	r.retireFlowMessage(ctx, state.Key.ChatID, prevID, state.MessageID)
+	return nil
+}
+
+// retireFlowMessage deletes a superseded flow message, or only removes its buttons when deletion fails.
+// Telegram failures are logged and never change flow or domain state.
+func (r *Router) retireFlowMessage(ctx context.Context, chatID, prevID, currentID int64) {
+	if prevID == 0 || prevID == currentID {
+		return
+	}
+	err := r.client.DeleteMessage(ctx, chatID, prevID)
+	if err == nil {
+		return
+	}
+	r.logger.Debug("failed to delete superseded flow message, removing its buttons",
+		"chat_id", chatID, "message_id", prevID, "error", err)
+	noKeyboard := &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{}}
+	if err := r.client.EditMessageReplyMarkup(ctx, chatID, prevID, noKeyboard); err != nil {
+		r.logger.Debug("failed to remove buttons of superseded flow message",
+			"chat_id", chatID, "message_id", prevID, "error", err)
+	}
+}
+
+// reanchorRejected re-anchors the flow with a rejection notice and the typed prompt asked again.
+func (r *Router) reanchorRejected(ctx context.Context, state *flow.State, locale string, pc PickerContext, notice, prompt string) error {
+	return r.reanchorFlow(ctx, state, func() error {
+		return r.showFlowMessage(ctx, state, r.flowStepText(locale, pc, notice, prompt), r.cancelOnlyMarkup(locale))
+	})
+}
+
+// flowStepText joins the context header of values already chosen with the non-empty parts of a step.
+func (r *Router) flowStepText(locale string, pc PickerContext, parts ...string) string {
+	all := make([]string, 0, len(parts)+1)
+	if header := RenderContextHeader(r.i18n, locale, pc, r.clock.Now(), r.clock.Location()); header != "" {
+		all = append(all, header)
+	}
+	for _, p := range parts {
+		if p != "" {
+			all = append(all, p)
+		}
+	}
+	return strings.Join(all, "\n\n")
+}
+
 func (r *Router) closeCallbackKeyboard(ctx context.Context, msg *Message) {
 	if msg == nil {
 		return

@@ -33,6 +33,11 @@ type choreFlowPayload struct {
 	CalMonth           int       `json:"cal_month,omitempty"`
 }
 
+// choreContext returns the values already chosen, shown as the header of each step after the title.
+func choreContext(p choreFlowPayload) PickerContext {
+	return PickerContext{Emoji: p.Emoji, Title: p.Name, Person: p.AssigneeName, Date: p.DueDate}
+}
+
 func parseDateTime(input string, clock Clock) (time.Time, error) {
 	trimmed := strings.TrimSpace(input)
 	loc := clock.Location()
@@ -124,17 +129,17 @@ func (r *Router) promptChoreAssignee(ctx context.Context, state *flow.State, loc
 	})
 
 	prompt := r.i18n.T(locale, "chores.prompt_assignee", payload.Name)
-	return r.showFlowMessage(ctx, state, prompt, &InlineKeyboardMarkup{InlineKeyboard: rows})
+	return r.showFlowMessage(ctx, state, r.flowStepText(locale, choreContext(payload), prompt), &InlineKeyboardMarkup{InlineKeyboard: rows})
 }
 
-func (r *Router) promptChoreRecurrenceType(ctx context.Context, state *flow.State, locale string) error {
+func (r *Router) promptChoreRecurrenceType(ctx context.Context, state *flow.State, locale string, payload choreFlowPayload) error {
 	prompt, markup := RenderRecurrenceTypeStep(r.i18n, locale)
-	return r.showFlowMessage(ctx, state, prompt, markup)
+	return r.showFlowMessage(ctx, state, r.flowStepText(locale, choreContext(payload), prompt), markup)
 }
 
 func (r *Router) promptChoreInterval(ctx context.Context, state *flow.State, locale string, payload choreFlowPayload) error {
 	prompt, markup := RenderIntervalStep(r.i18n, locale, payload.RecurrenceType)
-	return r.showFlowMessage(ctx, state, prompt, markup)
+	return r.showFlowMessage(ctx, state, r.flowStepText(locale, choreContext(payload), prompt), markup)
 }
 
 func (r *Router) promptChoreDate(ctx context.Context, state *flow.State, locale string, payload *choreFlowPayload) error {
@@ -144,22 +149,23 @@ func (r *Router) promptChoreDate(ctx context.Context, state *flow.State, locale 
 		payload.CalMonth = int(now.Month())
 	}
 	prompt, markup := RenderCalendarStep(r.i18n, locale, payload.CalYear, time.Month(payload.CalMonth), now, r.clock.Location())
-	return r.showFlowMessage(ctx, state, prompt, markup)
+	return r.showFlowMessage(ctx, state, r.flowStepText(locale, choreContext(*payload), prompt), markup)
 }
 
-func (r *Router) promptChoreHour(ctx context.Context, state *flow.State, locale string) error {
-	prompt, markup := RenderHourStep(r.i18n, locale)
-	return r.showFlowMessage(ctx, state, prompt, markup)
+// promptChoreHour shows the hour step; notice explains a rejected time and may be empty.
+func (r *Router) promptChoreHour(ctx context.Context, state *flow.State, locale string, payload choreFlowPayload, notice string) error {
+	prompt, markup := RenderHourStep(r.i18n, locale, payload.DueDate, r.clock.Now(), r.clock.Location())
+	return r.showFlowMessage(ctx, state, r.flowStepText(locale, choreContext(payload), notice, prompt), markup)
 }
 
-func (r *Router) promptChoreMinute(ctx context.Context, state *flow.State, locale string) error {
-	prompt, markup := RenderMinuteStep(r.i18n, locale)
-	return r.showFlowMessage(ctx, state, prompt, markup)
+func (r *Router) promptChoreMinute(ctx context.Context, state *flow.State, locale string, payload choreFlowPayload) error {
+	prompt, markup := RenderMinuteStep(r.i18n, locale, payload.DueDate, payload.DueHour, r.clock.Now(), r.clock.Location())
+	return r.showFlowMessage(ctx, state, r.flowStepText(locale, choreContext(payload), prompt), markup)
 }
 
-func (r *Router) promptChoreAnchor(ctx context.Context, state *flow.State, locale string) error {
+func (r *Router) promptChoreAnchor(ctx context.Context, state *flow.State, locale string, payload choreFlowPayload) error {
 	prompt, markup := RenderAnchorStep(r.i18n, locale)
-	return r.showFlowMessage(ctx, state, prompt, markup)
+	return r.showFlowMessage(ctx, state, r.flowStepText(locale, choreContext(payload), prompt), markup)
 }
 
 func (r *Router) promptChoreConfirm(ctx context.Context, state *flow.State, locale string, payload choreFlowPayload) error {
@@ -183,20 +189,17 @@ func (r *Router) promptChoreConfirm(ctx context.Context, state *flow.State, loca
 		anchor = *payload.RecurrenceAnchor
 	}
 
-	prompt, markup := RenderConfirmationStep(
-		r.i18n,
-		locale,
-		payload.Name,
-		r.i18n.T(locale, "picker.summary_assignee"),
-		payload.AssigneeName,
-		payload.DueAt,
-		recType,
-		interval,
-		anchor,
-		r.clock.Now(),
-		r.clock.Location(),
-	)
-	return r.showFlowMessage(ctx, state, prompt, markup)
+	prompt, markup := RenderConfirmationStep(r.i18n, locale, ConfirmationSummary{
+		Emoji:       payload.Emoji,
+		Title:       payload.Name,
+		PersonLabel: "picker.summary_assignee",
+		PersonName:  payload.AssigneeName,
+		DueAt:       payload.DueAt,
+		RecType:     recType,
+		Interval:    interval,
+		Anchor:      anchor,
+	}, r.clock.Now(), r.clock.Location())
+	return r.showFlowMessage(ctx, state, r.flowStepText(locale, choreContext(payload), prompt), markup)
 }
 
 func (r *Router) handleChoresFlowText(ctx context.Context, member *household.Member, msg *Message, state *flow.State) error {
@@ -211,6 +214,7 @@ func (r *Router) handleChoresFlowText(ctx context.Context, member *household.Mem
 	var payload choreFlowPayload
 	_ = json.Unmarshal(state.Payload, &payload)
 
+	// Typed answers, accepted or rejected, re-anchor the flow below the user's message.
 	switch state.Step {
 	case "chore_new_name":
 		if text == "" {
@@ -219,29 +223,33 @@ func (r *Router) handleChoresFlowText(ctx context.Context, member *household.Mem
 		payload.Name = text
 		payload.Emoji = "🧹"
 		_ = r.flow.Set(ctx, flowKey, "chore_assignee", payload, r.cfg.FlowTTL)
-		return r.promptChoreAssignee(ctx, state, locale, payload)
+		return r.reanchorFlow(ctx, state, func() error {
+			return r.promptChoreAssignee(ctx, state, locale, payload)
+		})
 
 	case "chore_typed_interval":
 		n, err := ValidateTypedInterval(text)
 		if err != nil {
-			guidance := r.i18n.T(locale, "picker.invalid_interval") + "\n\n" + r.i18n.T(locale, "picker.prompt_type_interval")
-			return r.showFlowMessage(ctx, state, guidance, r.cancelOnlyMarkup(locale))
+			return r.reanchorRejected(ctx, state, locale, choreContext(payload),
+				r.i18n.T(locale, "picker.invalid_interval"), r.i18n.T(locale, "picker.prompt_type_interval"))
 		}
 		payload.RecurrenceInterval = &n
 		_ = r.flow.Set(ctx, flowKey, "chore_date", payload, r.cfg.FlowTTL)
-		return r.promptChoreDate(ctx, state, locale, &payload)
+		return r.reanchorFlow(ctx, state, func() error {
+			return r.promptChoreDate(ctx, state, locale, &payload)
+		})
 
 	case "chore_typed_date":
 		dateOnly, dateTime, isDateTime, err := r.parseTypedDateOrTime(text)
 		if err != nil {
-			guidance := r.i18n.T(locale, "general.invalid_date_format") + "\n\n" + r.i18n.T(locale, "picker.prompt_type_date")
-			return r.showFlowMessage(ctx, state, guidance, r.cancelOnlyMarkup(locale))
+			return r.reanchorRejected(ctx, state, locale, choreContext(payload),
+				r.i18n.T(locale, "general.invalid_date_format"), r.i18n.T(locale, "picker.prompt_type_date"))
 		}
 		if isDateTime {
 			now := r.clock.Now().In(r.clock.Location())
 			if !dateTime.After(now) {
-				guidance := r.i18n.T(locale, "general.past_due_time") + "\n\n" + r.i18n.T(locale, "picker.prompt_type_date")
-				return r.showFlowMessage(ctx, state, guidance, r.cancelOnlyMarkup(locale))
+				return r.reanchorRejected(ctx, state, locale, choreContext(payload),
+					r.i18n.T(locale, "general.past_due_time"), r.i18n.T(locale, "picker.prompt_type_date"))
 			}
 			payload.DueAt = dateTime
 			payload.DueDate = dateTime.Format("2006-01-02")
@@ -252,20 +260,26 @@ func (r *Router) handleChoresFlowText(ctx context.Context, member *household.Mem
 			hasDefRec := payload.DefID != 0 && payload.RecurrenceInterval != nil && payload.RecurrenceAnchor != nil
 			if isRecurring && !hasDefRec {
 				_ = r.flow.Set(ctx, flowKey, "chore_anchor", payload, r.cfg.FlowTTL)
-				return r.promptChoreAnchor(ctx, state, locale)
+				return r.reanchorFlow(ctx, state, func() error {
+					return r.promptChoreAnchor(ctx, state, locale, payload)
+				})
 			}
 			_ = r.flow.Set(ctx, flowKey, "chore_confirm", payload, r.cfg.FlowTTL)
-			return r.promptChoreConfirm(ctx, state, locale, payload)
+			return r.reanchorFlow(ctx, state, func() error {
+				return r.promptChoreConfirm(ctx, state, locale, payload)
+			})
 		}
 		payload.DueDate = dateOnly
 		_ = r.flow.Set(ctx, flowKey, "chore_hour", payload, r.cfg.FlowTTL)
-		return r.promptChoreHour(ctx, state, locale)
+		return r.reanchorFlow(ctx, state, func() error {
+			return r.promptChoreHour(ctx, state, locale, payload, "")
+		})
 
 	case "chore_typed_minute":
 		m, err := ValidateTypedMinute(text)
 		if err != nil {
-			guidance := r.i18n.T(locale, "picker.invalid_minute") + "\n\n" + r.i18n.T(locale, "picker.prompt_type_minute")
-			return r.showFlowMessage(ctx, state, guidance, r.cancelOnlyMarkup(locale))
+			return r.reanchorRejected(ctx, state, locale, choreContext(payload),
+				r.i18n.T(locale, "picker.invalid_minute"), r.i18n.T(locale, "picker.prompt_type_minute"))
 		}
 		loc := r.clock.Location()
 		dateT, _ := time.ParseInLocation("2006-01-02", payload.DueDate, loc)
@@ -275,9 +289,9 @@ func (r *Router) handleChoresFlowText(ctx context.Context, member *household.Mem
 			payload.DueHour = 0
 			payload.DueMinute = 0
 			_ = r.flow.Set(ctx, flowKey, "chore_hour", payload, r.cfg.FlowTTL)
-			hourPrompt, hourMarkup := RenderHourStep(r.i18n, locale)
-			hourPrompt = r.i18n.T(locale, "general.past_due_time") + "\n\n" + hourPrompt
-			return r.showFlowMessage(ctx, state, hourPrompt, hourMarkup)
+			return r.reanchorFlow(ctx, state, func() error {
+				return r.promptChoreHour(ctx, state, locale, payload, r.i18n.T(locale, "picker.time_passed"))
+			})
 		}
 		payload.DueAt = dueAt
 		payload.DueMinute = m
@@ -286,10 +300,14 @@ func (r *Router) handleChoresFlowText(ctx context.Context, member *household.Mem
 		hasDefRec := payload.DefID != 0 && payload.RecurrenceInterval != nil && payload.RecurrenceAnchor != nil
 		if isRecurring && !hasDefRec {
 			_ = r.flow.Set(ctx, flowKey, "chore_anchor", payload, r.cfg.FlowTTL)
-			return r.promptChoreAnchor(ctx, state, locale)
+			return r.reanchorFlow(ctx, state, func() error {
+				return r.promptChoreAnchor(ctx, state, locale, payload)
+			})
 		}
 		_ = r.flow.Set(ctx, flowKey, "chore_confirm", payload, r.cfg.FlowTTL)
-		return r.promptChoreConfirm(ctx, state, locale, payload)
+		return r.reanchorFlow(ctx, state, func() error {
+			return r.promptChoreConfirm(ctx, state, locale, payload)
+		})
 	}
 
 	return nil
@@ -369,7 +387,7 @@ func (r *Router) handleChoresFlowCallback(ctx context.Context, member *household
 			return r.promptChoreDate(ctx, state, locale, &payload)
 		}
 		_ = r.flow.Set(ctx, flowKey, "chore_recurrence_type", payload, r.cfg.FlowTTL)
-		return r.promptChoreRecurrenceType(ctx, state, locale)
+		return r.promptChoreRecurrenceType(ctx, state, locale, payload)
 
 	case CallbackFlowRecurrenceType:
 		_ = r.client.AnswerCallbackQuery(ctx, cq.ID, "", false)
@@ -399,7 +417,7 @@ func (r *Router) handleChoresFlowCallback(ctx context.Context, member *household
 		if parsed.Payload == "o" {
 			_ = r.flow.Set(ctx, flowKey, "chore_typed_interval", payload, r.cfg.FlowTTL)
 			prompt := r.i18n.T(locale, "picker.prompt_type_interval")
-			return r.showFlowMessage(ctx, state, prompt, r.cancelOnlyMarkup(locale))
+			return r.showFlowMessage(ctx, state, r.flowStepText(locale, choreContext(payload), prompt), r.cancelOnlyMarkup(locale))
 		}
 		n := int(parsed.TargetID)
 		payload.RecurrenceInterval = &n
@@ -425,7 +443,16 @@ func (r *Router) handleChoresFlowCallback(ctx context.Context, member *household
 		case "type":
 			_ = r.flow.Set(ctx, flowKey, "chore_typed_date", payload, r.cfg.FlowTTL)
 			prompt := r.i18n.T(locale, "picker.prompt_type_date")
-			return r.showFlowMessage(ctx, state, prompt, r.cancelOnlyMarkup(locale))
+			return r.showFlowMessage(ctx, state, r.flowStepText(locale, choreContext(payload), prompt), r.cancelOnlyMarkup(locale))
+		case "back":
+			// Change date: back to the calendar on the chosen month, other choices kept.
+			if day, err := time.ParseInLocation("2006-01-02", payload.DueDate, r.clock.Location()); err == nil {
+				payload.CalYear = day.Year()
+				payload.CalMonth = int(day.Month())
+			}
+			payload.DueDate = ""
+			_ = r.flow.Set(ctx, flowKey, "chore_date", payload, r.cfg.FlowTTL)
+			return r.promptChoreDate(ctx, state, locale, &payload)
 		case "today":
 			payload.DueDate = nowInLoc.Format("2006-01-02")
 		case "tomorrow":
@@ -434,35 +461,34 @@ func (r *Router) handleChoresFlowCallback(ctx context.Context, member *household
 			payload.DueDate = parsed.Payload
 		}
 		_ = r.flow.Set(ctx, flowKey, "chore_hour", payload, r.cfg.FlowTTL)
-		return r.promptChoreHour(ctx, state, locale)
+		return r.promptChoreHour(ctx, state, locale, payload, "")
 
 	case CallbackFlowHour:
 		_ = r.client.AnswerCallbackQuery(ctx, cq.ID, "", false)
 		payload.DueHour = int(parsed.TargetID)
 		_ = r.flow.Set(ctx, flowKey, "chore_minute", payload, r.cfg.FlowTTL)
-		return r.promptChoreMinute(ctx, state, locale)
+		return r.promptChoreMinute(ctx, state, locale, payload)
 
 	case CallbackFlowMinute:
 		if parsed.Payload == "o" {
 			_ = r.client.AnswerCallbackQuery(ctx, cq.ID, "", false)
 			_ = r.flow.Set(ctx, flowKey, "chore_typed_minute", payload, r.cfg.FlowTTL)
 			prompt := r.i18n.T(locale, "picker.prompt_type_minute")
-			return r.showFlowMessage(ctx, state, prompt, r.cancelOnlyMarkup(locale))
+			return r.showFlowMessage(ctx, state, r.flowStepText(locale, choreContext(payload), prompt), r.cancelOnlyMarkup(locale))
 		}
 		minute := int(parsed.TargetID)
 		loc := r.clock.Location()
 		dateT, _ := time.ParseInLocation("2006-01-02", payload.DueDate, loc)
 		dueAt := time.Date(dateT.Year(), dateT.Month(), dateT.Day(), payload.DueHour, minute, 0, 0, loc)
 		now := r.clock.Now().In(loc)
+		_ = r.client.AnswerCallbackQuery(ctx, cq.ID, "", false)
 		if !dueAt.After(now) {
-			_ = r.client.AnswerCallbackQuery(ctx, cq.ID, r.i18n.T(locale, "general.past_due_time"), true)
+			// The minute passed between rendering and pressing: explain it in the message.
 			payload.DueHour = 0
 			payload.DueMinute = 0
 			_ = r.flow.Set(ctx, flowKey, "chore_hour", payload, r.cfg.FlowTTL)
-			hourPrompt, hourMarkup := RenderHourStep(r.i18n, locale)
-			return r.showFlowMessage(ctx, state, hourPrompt, hourMarkup)
+			return r.promptChoreHour(ctx, state, locale, payload, r.i18n.T(locale, "picker.time_passed"))
 		}
-		_ = r.client.AnswerCallbackQuery(ctx, cq.ID, "", false)
 		payload.DueAt = dueAt
 		payload.DueMinute = minute
 
@@ -470,7 +496,7 @@ func (r *Router) handleChoresFlowCallback(ctx context.Context, member *household
 		hasDefRec := payload.DefID != 0 && payload.RecurrenceInterval != nil && payload.RecurrenceAnchor != nil
 		if isRecurring && !hasDefRec {
 			_ = r.flow.Set(ctx, flowKey, "chore_anchor", payload, r.cfg.FlowTTL)
-			return r.promptChoreAnchor(ctx, state, locale)
+			return r.promptChoreAnchor(ctx, state, locale, payload)
 		}
 		_ = r.flow.Set(ctx, flowKey, "chore_confirm", payload, r.cfg.FlowTTL)
 		return r.promptChoreConfirm(ctx, state, locale, payload)

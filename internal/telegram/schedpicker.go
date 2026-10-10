@@ -253,24 +253,77 @@ func RenderCalendarStep(t PickerTranslator, locale string, year int, month time.
 	return prompt, &InlineKeyboardMarkup{InlineKeyboard: allRows}
 }
 
-// RenderHourStep renders the 24-hour grid (6 columns by 4 rows).
-func RenderHourStep(t PickerTranslator, locale string) (string, *InlineKeyboardMarkup) {
-	prompt := t.T(locale, "picker.prompt_hour")
+// PickerContext holds the values already chosen in a scheduling flow; they head every step after the title.
+type PickerContext struct {
+	Emoji  string
+	Title  string
+	Person string
+	Date   string // YYYY-MM-DD in the household timezone, empty until chosen
+}
 
-	rows := make([][]InlineKeyboardButton, 0, 5)
+// RenderContextHeader renders the chosen values on one line ("🧹 Clean kitchen · Alice · October 14").
+// It returns "" while no title is set.
+func RenderContextHeader(t PickerTranslator, locale string, pc PickerContext, now time.Time, loc *time.Location) string {
+	if pc.Title == "" {
+		return ""
+	}
+	parts := []string{strings.TrimSpace(pc.Emoji + " " + pc.Title)}
+	if pc.Person != "" {
+		parts = append(parts, pc.Person)
+	}
+	if pc.Date != "" {
+		if day, err := time.ParseInLocation("2006-01-02", pc.Date, loc); err == nil {
+			monthName := day.Month().String()
+			if months := strings.Split(t.T(locale, "picker.months"), ","); int(day.Month()) <= len(months) {
+				monthName = strings.TrimSpace(months[day.Month()-1])
+			}
+			date := fmt.Sprintf("%s %d", monthName, day.Day())
+			if day.Year() != now.In(loc).Year() {
+				date += fmt.Sprintf(" %d", day.Year())
+			}
+			parts = append(parts, date)
+		}
+	}
+	return strings.Join(parts, " · ")
+}
+
+// RecurrenceText renders "Every week" or "Every 2 weeks" from the singular or plural locale form.
+// unit is "day", "week" or "month".
+func RecurrenceText(t PickerTranslator, locale string, interval int, unit string) string {
+	if interval == 1 {
+		return t.T(locale, "general.recurrence_every_"+unit+"_one")
+	}
+	return t.T(locale, "general.recurrence_every_"+unit+"_other", interval)
+}
+
+// isToday reports whether dueDate (YYYY-MM-DD) is the current day in loc.
+func isToday(dueDate string, now time.Time, loc *time.Location) bool {
+	return dueDate != "" && now.In(loc).Format("2006-01-02") == dueDate
+}
+
+// RenderHourStep renders the 24-hour grid (6 columns by 4 rows) with Change date.
+// For today, hours before the current hour are inert.
+func RenderHourStep(t PickerTranslator, locale string, dueDate string, now time.Time, loc *time.Location) (string, *InlineKeyboardMarkup) {
+	prompt := t.T(locale, "picker.prompt_hour")
+	today := isToday(dueDate, now, loc)
+	nowHour := now.In(loc).Hour()
+
+	rows := make([][]InlineKeyboardButton, 0, 6)
 	for r := 0; r < 4; r++ {
 		row := make([]InlineKeyboardButton, 0, 6)
 		for c := 0; c < 6; c++ {
 			h := r*6 + c
-			row = append(row, InlineKeyboardButton{
-				Text:         fmt.Sprintf("%02d", h),
-				CallbackData: FlowHourCallback(h),
-			})
+			btn := InlineKeyboardButton{Text: fmt.Sprintf("%02d", h), CallbackData: FlowHourCallback(h)}
+			if today && h < nowHour {
+				btn = InlineKeyboardButton{Text: "·", CallbackData: "fl:noop"}
+			}
+			row = append(row, btn)
 		}
 		rows = append(rows, row)
 	}
 
 	rows = append(rows, []InlineKeyboardButton{
+		{Text: t.T(locale, "picker.btn_change_date"), CallbackData: "fl:d:back"},
 		{Text: t.T(locale, "buttons.cancel"), CallbackData: "fl:c"},
 	})
 
@@ -278,18 +331,22 @@ func RenderHourStep(t PickerTranslator, locale string) (string, *InlineKeyboardM
 }
 
 // RenderMinuteStep renders the 5-minute grid (4 columns by 3 rows) plus Other and Cancel.
-func RenderMinuteStep(t PickerTranslator, locale string) (string, *InlineKeyboardMarkup) {
+// For today's current hour, minutes not later than the current minute are inert.
+func RenderMinuteStep(t PickerTranslator, locale string, dueDate string, hour int, now time.Time, loc *time.Location) (string, *InlineKeyboardMarkup) {
 	prompt := t.T(locale, "picker.prompt_minute")
+	local := now.In(loc)
+	today := isToday(dueDate, now, loc)
 
 	rows := make([][]InlineKeyboardButton, 0, 4)
 	for r := 0; r < 3; r++ {
 		row := make([]InlineKeyboardButton, 0, 4)
 		for c := 0; c < 4; c++ {
 			m := (r*4 + c) * 5
-			row = append(row, InlineKeyboardButton{
-				Text:         fmt.Sprintf("%02d", m),
-				CallbackData: FlowMinuteCallback(m),
-			})
+			btn := InlineKeyboardButton{Text: fmt.Sprintf("%02d", m), CallbackData: FlowMinuteCallback(m)}
+			if today && (hour < local.Hour() || (hour == local.Hour() && m <= local.Minute())) {
+				btn = InlineKeyboardButton{Text: "·", CallbackData: "fl:noop"}
+			}
+			row = append(row, btn)
 		}
 		rows = append(rows, row)
 	}
@@ -319,50 +376,36 @@ func RenderAnchorStep(t PickerTranslator, locale string) (string, *InlineKeyboar
 	return prompt, &InlineKeyboardMarkup{InlineKeyboard: rows}
 }
 
-// RenderConfirmationStep renders the confirmation summary and confirm/cancel buttons.
-func RenderConfirmationStep(
-	t PickerTranslator,
-	locale string,
-	title string,
-	personLabel string,
-	personName string,
-	dueTime time.Time,
-	recType string,
-	interval int,
-	anchor string,
-	now time.Time,
-	loc *time.Location,
-) (string, *InlineKeyboardMarkup) {
-	var recDesc string
-	switch recType {
-	case "daily":
-		recDesc = t.T(locale, "general.recurrence_every_day", interval)
-	case "weekly":
-		recDesc = t.T(locale, "general.recurrence_every_week", interval)
-	case "monthly":
-		recDesc = t.T(locale, "general.recurrence_every_month", interval)
-	default:
-		recDesc = t.T(locale, "general.recurrence_one_off")
-	}
+// ConfirmationSummary holds the values shown on the final confirmation step.
+type ConfirmationSummary struct {
+	Emoji       string
+	Title       string
+	PersonLabel string // locale key of the person line: picker.summary_assignee or picker.summary_target
+	PersonName  string
+	DueAt       time.Time
+	RecType     string // once, daily, weekly or monthly
+	Interval    int
+	Anchor      string // scheduled or completion; used only for recurring items
+}
 
-	dueFormatted := t.FormatDateTime(locale, dueTime, now, loc)
-
+// RenderConfirmationStep renders one emoji line per value and the Confirm and Cancel buttons.
+func RenderConfirmationStep(t PickerTranslator, locale string, s ConfirmationSummary, now time.Time, loc *time.Location) (string, *InlineKeyboardMarkup) {
 	var sb strings.Builder
 	sb.WriteString(t.T(locale, "picker.prompt_confirm"))
 	sb.WriteString("\n\n")
-	fmt.Fprintf(&sb, "%s: %s\n", t.T(locale, "picker.summary_title"), title)
-	fmt.Fprintf(&sb, "%s: %s\n", personLabel, personName)
-	fmt.Fprintf(&sb, "%s: %s\n", t.T(locale, "picker.summary_due"), dueFormatted)
-	fmt.Fprintf(&sb, "%s: %s", t.T(locale, "picker.summary_recurrence"), recDesc)
+	fmt.Fprintf(&sb, "%s %s\n", s.Emoji, s.Title)
+	fmt.Fprintf(&sb, "%s\n", t.T(locale, s.PersonLabel, s.PersonName))
+	fmt.Fprintf(&sb, "%s\n", t.T(locale, "picker.summary_due", t.FormatDateTime(locale, s.DueAt, now, loc)))
 
-	if recType != "once" && recType != "" {
-		var ancDesc string
-		if anchor == "completion" {
-			ancDesc = t.T(locale, "picker.anchor_completion")
-		} else {
-			ancDesc = t.T(locale, "picker.anchor_scheduled")
+	if unit := recurrenceUnit(s.RecType); unit != "" {
+		fmt.Fprintf(&sb, "%s\n", t.T(locale, "picker.summary_recurrence", RecurrenceText(t, locale, s.Interval, unit)))
+		anchorKey := "picker.summary_anchor_scheduled"
+		if s.Anchor == "completion" {
+			anchorKey = "picker.summary_anchor_completion"
 		}
-		fmt.Fprintf(&sb, "\n%s: %s", t.T(locale, "picker.summary_anchor"), ancDesc)
+		sb.WriteString(t.T(locale, anchorKey))
+	} else {
+		sb.WriteString(t.T(locale, "picker.summary_once"))
 	}
 
 	rows := [][]InlineKeyboardButton{
@@ -373,4 +416,17 @@ func RenderConfirmationStep(
 	}
 
 	return sb.String(), &InlineKeyboardMarkup{InlineKeyboard: rows}
+}
+
+// recurrenceUnit maps a picker recurrence type to its locale unit name, or "" for one-time items.
+func recurrenceUnit(recType string) string {
+	switch recType {
+	case "daily":
+		return "day"
+	case "weekly":
+		return "week"
+	case "monthly":
+		return "month"
+	}
+	return ""
 }

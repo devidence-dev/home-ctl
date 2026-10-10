@@ -55,15 +55,19 @@ Para ver el log en vivo: `docker logs -f homectl`.
 
 ## 5. Chores
 
-- [ ] `/add` abre la selección de tarea o pide nombre nuevo si el catálogo está vacío; todo el flujo edita este único mensaje sin enviar mensajes intermedios.
-- [ ] Al seleccionar o escribir el nombre, el mensaje se edita para pedir el asignado.
+- [ ] `/add` abre la selección de tarea o pide nombre nuevo si el catálogo está vacío; los pasos con botones editan este único mensaje sin enviar mensajes intermedios.
+- [ ] Al seleccionar una tarea existente, el mensaje se edita para pedir el asignado.
+- [ ] Al escribir un nombre nuevo, el paso de asignado aparece como mensaje nuevo debajo de tu texto y el mensaje anterior desaparece; los botones que aún pulses en el mensaje anterior dan aviso de que la acción expiró.
+- [ ] Cada paso después del título empieza con una cabecera con lo ya elegido, por ejemplo `🧹 Limpiar bebedero · Alice · octubre 14` (en inglés: `🧹 Clean kitchen · Alice · October 14`).
 - [ ] Paso de recurrencia: elegir "Una vez" salta intervalo y anclaje directamente al calendario de fecha; tareas recurrentes piden tipo (Diario, Semanal, Mensual).
-- [ ] Intervalo: botones 1 a 12 o botón "Otro" para escribir un número entero (1 a 99); valores inválidos muestran guía y mantienen el paso.
+- [ ] Intervalo: botones 1 a 12 o botón "Otro" para escribir un número entero (1 a 99); valores inválidos muestran guía y mantienen el paso. Los textos de recurrencia usan singular y plural: "Cada semana" para 1, "Cada 2 semanas" para más de 1.
 - [ ] Calendario de fecha: muestra el mes actual con botones Hoy, Mañana y Escribir fecha; días pasados son inertes; navegar mes (`<` / `>`) edita el calendario sin avanzar el flujo; escribir fecha acepta fecha u hora y edita el mensaje al siguiente paso.
 - [ ] Hora y minuto: elegir hora (00-23) y minuto (00-55 en pasos de 5 u "Otro" para escribir 00-59).
-- [ ] Si la hora elegida para hoy ya pasó: muestra aviso de hora pasada y se mantiene en el paso de hora conservando la fecha.
+- [ ] Si la fecha elegida es hoy: las horas anteriores a la hora actual aparecen inertes (`·`) y pulsarlas no cambia nada; en la hora actual, los minutos no posteriores al minuto actual aparecen inertes.
+- [ ] Si la fecha elegida es hoy, el paso de hora tiene **Cambiar fecha**: vuelve al calendario conservando recurrencia e intervalo.
+- [ ] Hora pasada (minuto escrito, o el tiempo avanzó antes de pulsar): el mensaje muestra `⚠️ Esa hora ya pasó.` y vuelve al paso de hora conservando la fecha. No se crea nada.
 - [ ] Anclaje de recurrencia: elegir "Mantener horario" o "Desde completado".
-- [ ] Resumen de confirmación: muestra título, asignado, fecha/hora, recurrencia y anclaje con botones Confirmar y Cancelar.
+- [ ] Resumen de confirmación: una línea por dato (`🧹` título, `👤` asignado, `📅` fecha y hora, `🔁` recurrencia); en tareas recurrentes, una línea `⏭️` con la siguiente ocurrencia en lenguaje claro; botones `✅ Confirmar` y `❌ Cancelar`. La palabra "anclaje" no aparece. En una tarea de una sola vez no hay línea `⏭️`.
 - [ ] Confirmar: el mensaje de resumen pierde sus botones y crea exactamente una ocurrencia (`scheduled_at == due_at`).
 - [ ] Control de pertenencia: otro usuario presiona un botón del flujo de Alice y recibe aviso de que la interacción pertenece a otro miembro, sin alterar el flujo ni cerrar el teclado.
 - [ ] Cancelar en cualquier paso: cierra el teclado del mensaje de flujo y confirma la cancelación.
@@ -77,8 +81,11 @@ Para ver el log en vivo: `docker logs -f homectl`.
 ## 6. Reminders
 
 - [ ] `/add` en Reminders pide el título en un mensaje único.
-- [ ] Al enviar el título, el mensaje se edita para seleccionar el destinatario.
-- [ ] Mismo selector guiado: recurrencia ("Una vez" o periódica), intervalo, calendario de fecha, hora, minuto, anclaje y confirmación, editando siempre el mismo mensaje.
+- [ ] Al enviar el título, el selector de destinatario aparece como mensaje nuevo debajo de tu texto y el mensaje del título desaparece.
+- [ ] Mismo selector guiado: recurrencia ("Una vez" o periódica), intervalo, calendario de fecha, hora, minuto, anclaje y confirmación. Los pasos con botones editan el mismo mensaje; una respuesta escrita (fecha, intervalo, minuto) abre el siguiente paso como mensaje nuevo debajo de tu texto.
+- [ ] Cada paso después del título muestra la cabecera con lo ya elegido (`⏰ Título · Persona · fecha`).
+- [ ] Horas y minutos pasados para hoy son inertes; "Cambiar fecha" vuelve al calendario; una hora pasada se explica en el mensaje con `⚠️ Esa hora ya pasó.` y no crea nada.
+- [ ] El resumen de confirmación usa las mismas líneas con emoji que en tareas; en un recordatorio de una sola vez muestra `🔁 Una vez` y no tiene línea `⏭️`.
 - [ ] Control de pertenencia: si otro miembro intenta presionar botones del recordatorio de otro, recibe aviso de no pertenencia sin efectos.
 - [ ] Confirmar: el mensaje de confirmación pierde sus botones y se agenda el recordatorio.
 - [ ] A la hora de vencimiento llega el DM al destinatario.

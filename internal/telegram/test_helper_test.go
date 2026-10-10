@@ -53,6 +53,9 @@ type fakeClient struct {
 	setMyCommandsCalls []setMyCommandsCall
 	onSetMyCommands    func(scope telegram.BotCommandScope, lang string, cmds []telegram.BotCommand) error
 	onEditMessageText  func(ctx context.Context, chatID int64, messageID int64, text string, opts *telegram.EditOptions) error
+	deletedMessages    []int64
+	clearedKeyboards   []int64
+	onDeleteMessage    func(chatID int64, messageID int64) error
 }
 
 func newFakeClient() *fakeClient {
@@ -98,6 +101,39 @@ func (f *fakeClient) EditMessageText(ctx context.Context, chatID int64, messageI
 		Markup:    markup,
 	})
 	return nil
+}
+
+func (f *fakeClient) EditMessageReplyMarkup(_ context.Context, _ int64, messageID int64, _ *telegram.InlineKeyboardMarkup) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.clearedKeyboards = append(f.clearedKeyboards, messageID)
+	return nil
+}
+
+func (f *fakeClient) DeleteMessage(_ context.Context, chatID int64, messageID int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.onDeleteMessage != nil {
+		if err := f.onDeleteMessage(chatID, messageID); err != nil {
+			return err
+		}
+	}
+	f.deletedMessages = append(f.deletedMessages, messageID)
+	return nil
+}
+
+// DeletedMessages returns the ids of messages deleted through DeleteMessage.
+func (f *fakeClient) DeletedMessages() []int64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]int64(nil), f.deletedMessages...)
+}
+
+// ClearedKeyboards returns the ids of messages whose keyboard was removed via EditMessageReplyMarkup.
+func (f *fakeClient) ClearedKeyboards() []int64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]int64(nil), f.clearedKeyboards...)
 }
 
 func (f *fakeClient) AnswerCallbackQuery(_ context.Context, callbackQueryID string, text string, showAlert bool) error {

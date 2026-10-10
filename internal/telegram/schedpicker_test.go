@@ -104,8 +104,8 @@ func TestRenderers_EnglishAndSpanish(t *testing.T) {
 
 	// 2. Interval step
 	textIv, kbIv := telegram.RenderIntervalStep(bundle, "en", "weekly")
-	if !strings.Contains(textIv, "week(s)") {
-		t.Errorf("expected unit week(s) in interval text, got %q", textIv)
+	if !strings.Contains(textIv, "Repeat every how many weeks?") || strings.Contains(textIv, "(s)") {
+		t.Errorf("expected plural unit weeks in interval text, got %q", textIv)
 	}
 	if len(kbIv.InlineKeyboard) != 4 {
 		t.Fatalf("expected 4 rows in interval keyboard, got %d", len(kbIv.InlineKeyboard))
@@ -226,7 +226,7 @@ func TestRenderers_EnglishAndSpanish(t *testing.T) {
 	if actions[0].Text != "Type date" || actions[0].CallbackData != "fl:d:type" {
 		t.Errorf("unexpected Type date action: %+v", actions[0])
 	}
-	if actions[1].Text != "Cancel" || actions[1].CallbackData != "fl:c" {
+	if actions[1].Text != "❌ Cancel" || actions[1].CallbackData != "fl:c" {
 		t.Errorf("unexpected Cancel action: %+v", actions[1])
 	}
 
@@ -257,7 +257,7 @@ func TestRenderers_EnglishAndSpanish(t *testing.T) {
 	}
 
 	// 4. Hour step (6 columns by 4 rows)
-	textH, kbH := telegram.RenderHourStep(bundle, "en")
+	textH, kbH := telegram.RenderHourStep(bundle, "en", "2026-10-10", now, loc)
 	if !strings.Contains(textH, "Choose hour") {
 		t.Errorf("unexpected hour text: %q", textH)
 	}
@@ -285,7 +285,7 @@ func TestRenderers_EnglishAndSpanish(t *testing.T) {
 	}
 
 	// 5. Minute step (4 columns by 3 rows + other/cancel row)
-	textM, kbM := telegram.RenderMinuteStep(bundle, "en")
+	textM, kbM := telegram.RenderMinuteStep(bundle, "en", "2026-10-10", 10, now, loc)
 	if !strings.Contains(textM, "Choose minute") {
 		t.Errorf("unexpected minute text: %q", textM)
 	}
@@ -329,23 +329,20 @@ func TestRenderers_EnglishAndSpanish(t *testing.T) {
 
 	// 7. Confirmation summary step
 	due := time.Date(2026, time.October, 10, 10, 30, 0, 0, loc)
-	sumTextEN, sumKbEN := telegram.RenderConfirmationStep(
-		bundle,
-		"en",
-		"Change water purifier filter",
-		"Assignee",
-		"Alice",
-		due,
-		"monthly",
-		3,
-		"completion",
-		now,
-		loc,
-	)
-	if !strings.Contains(sumTextEN, "Change water purifier filter") ||
-		!strings.Contains(sumTextEN, "Alice") ||
-		!strings.Contains(sumTextEN, "every 3 month(s)") ||
-		!strings.Contains(sumTextEN, "From completion") {
+	sumTextEN, sumKbEN := telegram.RenderConfirmationStep(bundle, "en", telegram.ConfirmationSummary{
+		Emoji:       "🧹",
+		Title:       "Change water purifier filter",
+		PersonLabel: "picker.summary_assignee",
+		PersonName:  "Alice",
+		DueAt:       due,
+		RecType:     "monthly",
+		Interval:    3,
+		Anchor:      "completion",
+	}, now, loc)
+	if !strings.Contains(sumTextEN, "🧹 Change water purifier filter") ||
+		!strings.Contains(sumTextEN, "👤 Alice") ||
+		!strings.Contains(sumTextEN, "🔁 Every 3 months") ||
+		!strings.Contains(sumTextEN, "⏭️ The next one is calculated on completion") {
 		t.Errorf("unexpected EN summary text: %q", sumTextEN)
 	}
 	if len(sumKbEN.InlineKeyboard) != 1 || len(sumKbEN.InlineKeyboard[0]) != 2 {
@@ -356,23 +353,18 @@ func TestRenderers_EnglishAndSpanish(t *testing.T) {
 	}
 
 	// One-time summary has no anchor
-	sumOnceText, _ := telegram.RenderConfirmationStep(
-		bundle,
-		"en",
-		"Buy medicine",
-		"Target",
-		"Bob",
-		due,
-		"once",
-		0,
-		"",
-		now,
-		loc,
-	)
-	if strings.Contains(sumOnceText, "Anchor:") {
-		t.Errorf("one-time item must not display anchor, got %q", sumOnceText)
+	sumOnceText, _ := telegram.RenderConfirmationStep(bundle, "en", telegram.ConfirmationSummary{
+		Emoji:       "⏰",
+		Title:       "Buy medicine",
+		PersonLabel: "picker.summary_target",
+		PersonName:  "Bob",
+		DueAt:       due,
+		RecType:     "once",
+	}, now, loc)
+	if !strings.Contains(sumOnceText, "👤 For: Bob") || !strings.Contains(sumOnceText, "🔁 Once") {
+		t.Errorf("unexpected one-time summary, got %q", sumOnceText)
 	}
-	if !strings.Contains(sumOnceText, "one-off") {
-		t.Errorf("expected 'one-off' in one-time summary, got %q", sumOnceText)
+	if strings.Contains(sumOnceText, "⏭️") {
+		t.Errorf("one-time item must not display a next-occurrence line, got %q", sumOnceText)
 	}
 }

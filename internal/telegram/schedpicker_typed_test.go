@@ -29,6 +29,7 @@ func TestTypedSteps_Interval_Other(t *testing.T) {
 	})
 	initialMsg := env.client.LastSent()
 	flowMsgID := initialMsg.MessageID
+	var sent *sentMessage
 
 	_ = env.router.HandleUpdate(ctx, telegram.Update{
 		UpdateID: 2,
@@ -71,9 +72,9 @@ func TestTypedSteps_Interval_Other(t *testing.T) {
 			From: &telegram.User{ID: 101, FirstName: "Alice"}, Text: "0",
 		},
 	})
-	lastEdit = env.client.LastEdited()
-	if lastEdit == nil || !strings.Contains(lastEdit.Text, "1 to 99") {
-		t.Fatalf("expected guidance for invalid interval, got: %+v", lastEdit)
+	sent = env.client.LastSent()
+	if sent == nil || !strings.Contains(sent.Text, "1 to 99") {
+		t.Fatalf("expected guidance for invalid interval, got: %+v", sent)
 	}
 	state, _ = env.flow.Get(ctx, flowKeyFor(101, -1001234567890, 51), nil)
 	if state.Step != "chore_typed_interval" {
@@ -89,9 +90,9 @@ func TestTypedSteps_Interval_Other(t *testing.T) {
 			From: &telegram.User{ID: 101, FirstName: "Alice"}, Text: "100",
 		},
 	})
-	lastEdit = env.client.LastEdited()
-	if lastEdit == nil || !strings.Contains(lastEdit.Text, "1 to 99") {
-		t.Fatalf("expected guidance for 100, got: %+v", lastEdit)
+	sent = env.client.LastSent()
+	if sent == nil || !strings.Contains(sent.Text, "1 to 99") {
+		t.Fatalf("expected guidance for 100, got: %+v", sent)
 	}
 
 	// Alice sends invalid interval "abc" -> stays on step
@@ -103,9 +104,9 @@ func TestTypedSteps_Interval_Other(t *testing.T) {
 			From: &telegram.User{ID: 101, FirstName: "Alice"}, Text: "abc",
 		},
 	})
-	lastEdit = env.client.LastEdited()
-	if lastEdit == nil || !strings.Contains(lastEdit.Text, "1 to 99") {
-		t.Fatalf("expected guidance for abc, got: %+v", lastEdit)
+	sent = env.client.LastSent()
+	if sent == nil || !strings.Contains(sent.Text, "1 to 99") {
+		t.Fatalf("expected guidance for abc, got: %+v", sent)
 	}
 
 	// 5. Alice sends valid interval "15" -> continues to date step, editing flowMsgID
@@ -117,9 +118,9 @@ func TestTypedSteps_Interval_Other(t *testing.T) {
 			From: &telegram.User{ID: 101, FirstName: "Alice"}, Text: "15",
 		},
 	})
-	lastEdit = env.client.LastEdited()
-	if lastEdit == nil || lastEdit.MessageID != flowMsgID || !strings.Contains(lastEdit.Text, "first due date") {
-		t.Fatalf("expected date prompt on message %d, got: %+v", flowMsgID, lastEdit)
+	sent = env.client.LastSent()
+	if sent == nil || sent.MessageID == flowMsgID || !strings.Contains(sent.Text, "first due date") {
+		t.Fatalf("expected date prompt on message %d, got: %+v", flowMsgID, sent)
 	}
 	state, _ = env.flow.Get(ctx, flowKeyFor(101, -1001234567890, 51), nil)
 	if state.Step != "chore_date" {
@@ -144,6 +145,7 @@ func TestTypedSteps_Date_TypeDate(t *testing.T) {
 	})
 	initialMsg := env.client.LastSent()
 	flowMsgID := initialMsg.MessageID
+	var sent *sentMessage
 
 	_ = env.router.HandleUpdate(ctx, telegram.Update{
 		UpdateID: 2,
@@ -186,9 +188,9 @@ func TestTypedSteps_Date_TypeDate(t *testing.T) {
 			From: &telegram.User{ID: 101, FirstName: "Alice"}, Text: "next friday",
 		},
 	})
-	lastEdit = env.client.LastEdited()
-	if lastEdit == nil || !strings.Contains(lastEdit.Text, "format") {
-		t.Fatalf("expected format guidance, got: %+v", lastEdit)
+	sent = env.client.LastSent()
+	if sent == nil || !strings.Contains(sent.Text, "format") {
+		t.Fatalf("expected format guidance, got: %+v", sent)
 	}
 	state, _ = env.flow.Get(ctx, flowKeyFor(101, -1001234567890, 51), nil)
 	if state.Step != "chore_typed_date" {
@@ -204,9 +206,9 @@ func TestTypedSteps_Date_TypeDate(t *testing.T) {
 			From: &telegram.User{ID: 101, FirstName: "Alice"}, Text: "2026-10-10",
 		},
 	})
-	lastEdit = env.client.LastEdited()
-	if lastEdit == nil || lastEdit.MessageID != flowMsgID || !strings.Contains(lastEdit.Text, "hour") {
-		t.Fatalf("expected hour prompt on message %d, got: %+v", flowMsgID, lastEdit)
+	sent = env.client.LastSent()
+	if sent == nil || sent.MessageID == flowMsgID || !strings.Contains(sent.Text, "hour") {
+		t.Fatalf("expected hour prompt on message %d, got: %+v", flowMsgID, sent)
 	}
 	state, _ = env.flow.Get(ctx, flowKeyFor(101, -1001234567890, 51), nil)
 	if state.Step != "chore_hour" {
@@ -231,6 +233,7 @@ func TestTypedSteps_DateTime_AdvancesToConfirm(t *testing.T) {
 	})
 	initialMsg := env.client.LastSent()
 	flowMsgID := initialMsg.MessageID
+	var sent *sentMessage
 
 	_ = env.router.HandleUpdate(ctx, telegram.Update{
 		UpdateID: 2,
@@ -253,9 +256,9 @@ func TestTypedSteps_DateTime_AdvancesToConfirm(t *testing.T) {
 			From: &telegram.User{ID: 101, FirstName: "Alice"}, Text: "2026-10-10 10:00",
 		},
 	})
-	lastEdit := env.client.LastEdited()
-	if lastEdit == nil || lastEdit.MessageID != flowMsgID || !strings.Contains(lastEdit.Text, "Confirm") {
-		t.Fatalf("expected confirm prompt on message %d, got: %+v", flowMsgID, lastEdit)
+	sent = env.client.LastSent()
+	if sent == nil || sent.MessageID == flowMsgID || !strings.Contains(sent.Text, "Confirm") {
+		t.Fatalf("expected confirm prompt on a new message, got: %+v", sent)
 	}
 
 	_ = pressChoreCallback(ctx, env, 7, 101, "fl:ok")
@@ -286,6 +289,7 @@ func TestTypedSteps_Minute_Other(t *testing.T) {
 	})
 	initialMsg := env.client.LastSent()
 	flowMsgID := initialMsg.MessageID
+	var sent *sentMessage
 
 	_ = env.router.HandleUpdate(ctx, telegram.Update{
 		UpdateID: 2,
@@ -330,9 +334,9 @@ func TestTypedSteps_Minute_Other(t *testing.T) {
 			From: &telegram.User{ID: 101, FirstName: "Alice"}, Text: "75",
 		},
 	})
-	lastEdit = env.client.LastEdited()
-	if lastEdit == nil || !strings.Contains(lastEdit.Text, "00 to 59") {
-		t.Fatalf("expected 00 to 59 guidance, got: %+v", lastEdit)
+	sent = env.client.LastSent()
+	if sent == nil || !strings.Contains(sent.Text, "00 to 59") {
+		t.Fatalf("expected 00 to 59 guidance, got: %+v", sent)
 	}
 	state, _ = env.flow.Get(ctx, flowKeyFor(101, -1001234567890, 51), nil)
 	if state.Step != "chore_typed_minute" {
@@ -348,9 +352,9 @@ func TestTypedSteps_Minute_Other(t *testing.T) {
 			From: &telegram.User{ID: 101, FirstName: "Alice"}, Text: "07",
 		},
 	})
-	lastEdit = env.client.LastEdited()
-	if lastEdit == nil || lastEdit.MessageID != flowMsgID || !strings.Contains(lastEdit.Text, "Confirm") {
-		t.Fatalf("expected confirm prompt on message %d, got: %+v", flowMsgID, lastEdit)
+	sent = env.client.LastSent()
+	if sent == nil || sent.MessageID == flowMsgID || !strings.Contains(sent.Text, "Confirm") {
+		t.Fatalf("expected confirm prompt on message %d, got: %+v", flowMsgID, sent)
 	}
 
 	_ = pressChoreCallback(ctx, env, 11, 101, "fl:ok")

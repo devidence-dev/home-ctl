@@ -121,10 +121,11 @@ func TestFlowStaleCallback_ConfirmedFlowCannotDriveNewerFlow(t *testing.T) {
 			if err := sendText(ctx, env, 1, 101, sc.threadID, "/add"); err != nil {
 				t.Fatalf("/add failed: %v", err)
 			}
-			msgA := env.client.LastSent().MessageID
 			if err := sendText(ctx, env, 2, 101, sc.threadID, sc.titleA); err != nil {
 				t.Fatalf("title failed: %v", err)
 			}
+			// The typed title re-anchors flow A below the text: its buttons live on the new message.
+			msgA := env.client.LastSent().MessageID
 			for i, data := range []string{sc.target, "fl:rt:once", sc.date, "fl:h:10", "fl:mi:30"} {
 				if err := pressOnMessage(ctx, env, int64(10+i), 101, sc.threadID, msgA, data); err != nil {
 					t.Fatalf("step %q failed: %v", data, err)

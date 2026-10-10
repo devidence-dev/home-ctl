@@ -80,16 +80,21 @@ func TestChoresFlow_OneTime(t *testing.T) {
 	if err := env.router.HandleUpdate(ctx, uName); err != nil {
 		t.Fatalf("name text failed: %v", err)
 	}
-	lastEdit := env.client.LastEdited()
-	if lastEdit == nil || lastEdit.MessageID != flowMsgID || !strings.Contains(lastEdit.Text, "Clean kitchen") {
-		t.Fatalf("expected assignee prompt on message %d, got: %+v", flowMsgID, lastEdit)
+	// A typed answer re-anchors: the assignee step is a new message below the text and the name prompt is deleted.
+	lastSent := env.client.LastSent()
+	if lastSent == nil || lastSent.MessageID == flowMsgID || !strings.Contains(lastSent.Text, "Clean kitchen") {
+		t.Fatalf("expected assignee prompt as a new message after the typed name, got: %+v", lastSent)
 	}
+	if deleted := env.client.DeletedMessages(); len(deleted) != 1 || deleted[0] != flowMsgID {
+		t.Fatalf("expected name prompt %d deleted, got %v", flowMsgID, deleted)
+	}
+	flowMsgID = lastSent.MessageID // the active flow message from here on
 
 	// 3. Assign to Alice (101) -> moves to recurrence type step
 	if err := pressChoreCallback(ctx, env, 3, 101, "fl:usr:101"); err != nil {
 		t.Fatalf("assign callback failed: %v", err)
 	}
-	lastEdit = env.client.LastEdited()
+	lastEdit := env.client.LastEdited()
 	if lastEdit == nil || lastEdit.MessageID != flowMsgID || !strings.Contains(lastEdit.Text, "recurrence type") {
 		t.Fatalf("expected recurrence type prompt on message %d, got: %+v", flowMsgID, lastEdit)
 	}
@@ -139,9 +144,9 @@ func TestChoresFlow_OneTime(t *testing.T) {
 		t.Fatalf("expected closed keyboard on message %d after confirm, got: %+v", flowMsgID, lastEdit)
 	}
 
-	// Assert exactly 1 message was sent through the entire creation flow
-	if len(env.client.SentMessages()) != 1 {
-		t.Fatalf("expected exactly 1 message sent, got %d", len(env.client.SentMessages()))
+	// Two messages: the initial prompt, then the step re-anchored below the typed answer; button steps edit that one
+	if len(env.client.SentMessages()) != 2 {
+		t.Fatalf("expected 2 messages sent, got %d", len(env.client.SentMessages()))
 	}
 	// Assert all edits targeted the same flowMsgID
 	for _, em := range env.client.EditedMessages() {
@@ -433,16 +438,15 @@ func TestChoresFlow_PastTimeOnToday(t *testing.T) {
 	// Minute 00 -> 09:00 earlier today is in the past!
 	_ = pressChoreCallback(ctx, env, 7, 101, "fl:mi:00")
 
-	// Must answer with alert that time has passed
-	lastAns := env.client.LastAnswer()
-	if lastAns == nil || !strings.Contains(lastAns.Text, "past") {
-		t.Fatalf("expected past due time alert, got: %+v", lastAns)
+	// The past time is explained in the flow message, not in an alert
+	if lastAns := env.client.LastAnswer(); lastAns == nil || lastAns.Alert {
+		t.Fatalf("expected a plain callback answer, got: %+v", lastAns)
 	}
 
-	// Message stays at hour step with date kept
+	// Message stays at hour step with date kept and the explanation shown
 	lastEdit := env.client.LastEdited()
-	if lastEdit == nil || !strings.Contains(lastEdit.Text, "hour") {
-		t.Fatalf("expected to remain on hour step, got: %+v", lastEdit)
+	if lastEdit == nil || !strings.Contains(lastEdit.Text, env.i18n.T("en", "picker.time_passed")) || !strings.Contains(lastEdit.Text, "Choose hour") {
+		t.Fatalf("expected time-passed notice on the hour step, got: %+v", lastEdit)
 	}
 
 	// No occurrence was created

@@ -134,6 +134,42 @@ func TestHTTPClient_EditMessageText(t *testing.T) {
 	}
 }
 
+func TestHTTPClient_DeleteMessage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/deleteMessage" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		var req map[string]interface{}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req["chat_id"].(float64) != 12345 || req["message_id"].(float64) != 555 {
+			t.Errorf("unexpected body: %v", req)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "result": true})
+	}))
+	defer server.Close()
+
+	client := telegram.NewHTTPClientWithBaseURL(server.URL)
+	if err := client.DeleteMessage(context.Background(), 12345, 555); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestHTTPClient_DeleteMessageAPIError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok":          false,
+			"description": "Bad Request: message can't be deleted for everyone",
+		})
+	}))
+	defer server.Close()
+
+	client := telegram.NewHTTPClientWithBaseURL(server.URL)
+	err := client.DeleteMessage(context.Background(), 12345, 555)
+	if err == nil || err.Error() != "telegram api error: Bad Request: message can't be deleted for everyone" {
+		t.Fatalf("expected api error, got %v", err)
+	}
+}
+
 func TestHTTPClient_AnswerCallbackQuery(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/answerCallbackQuery" {
@@ -362,6 +398,12 @@ func (f *fakeClientForPolling) SendMessage(_ context.Context, _ int64, _ string,
 	return 0, nil
 }
 func (f *fakeClientForPolling) EditMessageText(_ context.Context, _ int64, _ int64, _ string, _ *telegram.EditOptions) error {
+	return nil
+}
+func (f *fakeClientForPolling) EditMessageReplyMarkup(_ context.Context, _ int64, _ int64, _ *telegram.InlineKeyboardMarkup) error {
+	return nil
+}
+func (f *fakeClientForPolling) DeleteMessage(_ context.Context, _ int64, _ int64) error {
 	return nil
 }
 func (f *fakeClientForPolling) AnswerCallbackQuery(_ context.Context, _ string, _ string, _ bool) error {
