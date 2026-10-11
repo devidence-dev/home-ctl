@@ -254,15 +254,16 @@ func TestEndToEnd_WorkflowsWithRestart(t *testing.T) {
 				DefaultLocale:    "en",
 				FlowTTL:          30 * time.Minute,
 			},
-			client,
-			hhSvc,
-			shSvc,
-			chSvc,
-			reSvc,
-			flMgr,
-			bundle,
-			clock,
-			nil,
+			telegram.RouterDeps{
+				Client:    client,
+				Household: hhSvc,
+				Shopping:  shSvc,
+				Chores:    chSvc,
+				Reminders: reSvc,
+				Flow:      flMgr,
+				I18n:      bundle,
+				Clock:     clock,
+			},
 		)
 
 		return hhSvc, shSvc, chSvc, reSvc, sched, router

@@ -39,8 +39,8 @@ run_lint() {
 echo "==> Step 1: gofmt check"
 UNFORMATTED="$(run_go sh -c 'find . -name "*.go" -not -path "./.git/*" -exec gofmt -l {} +')"
 if [ -n "$UNFORMATTED" ]; then
-  echo "Error: Unformatted Go files found:"
-  echo "$UNFORMATTED"
+  echo "Error: Unformatted Go files found:" >&2
+  echo "$UNFORMATTED" >&2
   exit 1
 fi
 echo "gofmt passed."
@@ -82,6 +82,7 @@ PACKAGES="$(run_go go list ./...)"
 while IFS= read -r pkg; do
   case "$pkg" in
     */cmd/*) continue ;;
+    *) ;;
   esac
   if ! awk -v p="$pkg" '$2 == p { found = 1 } END { exit !found }' coverage.pkgs.txt; then
     echo "FAIL: $pkg is missing from the go test output"

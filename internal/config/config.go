@@ -93,18 +93,9 @@ func Load(opts Options) (*Config, error) {
 	}
 
 	// 1. Secrets and environment validation
-	botToken := strings.TrimSpace(getenv("TELEGRAM_BOT_TOKEN"))
-	if botToken == "" {
-		return nil, fmt.Errorf("TELEGRAM_BOT_TOKEN environment variable is required")
-	}
-
-	tzStr := strings.TrimSpace(getenv("APP_TIMEZONE"))
-	if tzStr == "" {
-		return nil, fmt.Errorf("APP_TIMEZONE environment variable is required")
-	}
-	loc, err := time.LoadLocation(tzStr)
+	botToken, tzStr, loc, err := loadEnv(getenv)
 	if err != nil {
-		return nil, fmt.Errorf("invalid timezone %q in APP_TIMEZONE: %w", tzStr, err)
+		return nil, err
 	}
 
 	// 2. Load and parse YAML files with secret and timezone checks
@@ -126,6 +117,56 @@ func Load(opts Options) (*Config, error) {
 	}
 
 	// 3. Unmarshal users.yaml
+	users, err := parseUsers(usersBytes, usersFile)
+	if err != nil {
+		return nil, err
+	}
+
+	// 4. Unmarshal telegram.yaml
+	telegram, err := parseTelegram(telegramBytes, telegramFile)
+	if err != nil {
+		return nil, err
+	}
+
+	// 5. Unmarshal app.yaml
+	app, err := parseApp(appBytes, appFile)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateApp(app, localesDir); err != nil {
+		return nil, err
+	}
+
+	return &Config{
+		BotToken: botToken,
+		Timezone: tzStr,
+		Location: loc,
+		Users:    users,
+		Telegram: telegram,
+		App:      app,
+	}, nil
+}
+
+// loadEnv reads the required bot token and timezone from the environment.
+func loadEnv(getenv func(string) string) (string, string, *time.Location, error) {
+	botToken := strings.TrimSpace(getenv("TELEGRAM_BOT_TOKEN"))
+	if botToken == "" {
+		return "", "", nil, fmt.Errorf("TELEGRAM_BOT_TOKEN environment variable is required")
+	}
+
+	tzStr := strings.TrimSpace(getenv("APP_TIMEZONE"))
+	if tzStr == "" {
+		return "", "", nil, fmt.Errorf("APP_TIMEZONE environment variable is required")
+	}
+	loc, err := time.LoadLocation(tzStr)
+	if err != nil {
+		return "", "", nil, fmt.Errorf("invalid timezone %q in APP_TIMEZONE: %w", tzStr, err)
+	}
+	return botToken, tzStr, loc, nil
+}
+
+// parseUsers unmarshals users.yaml and rejects non-positive or duplicate user IDs.
+func parseUsers(usersBytes []byte, usersFile string) ([]UserConfig, error) {
 	var usersWrapper struct {
 		Users []UserConfig `yaml:"users"`
 	}
@@ -144,25 +185,28 @@ func Load(opts Options) (*Config, error) {
 		}
 		seenUsers[u.ID] = true
 	}
+	return usersWrapper.Users, nil
+}
 
-	// 4. Unmarshal telegram.yaml
+// parseTelegram unmarshals telegram.yaml and validates the chat ID and required topic mappings.
+func parseTelegram(telegramBytes []byte, telegramFile string) (TelegramConfig, error) {
 	var telegramRaw map[string]interface{}
 	if err := yaml.Unmarshal(telegramBytes, &telegramRaw); err != nil {
-		return nil, fmt.Errorf("error parsing %s: %w", telegramFile, err)
+		return TelegramConfig{}, fmt.Errorf("error parsing %s: %w", telegramFile, err)
 	}
 	tgSection, ok := telegramRaw["telegram"].(map[string]interface{})
 	if !ok {
-		return nil, fmt.Errorf("missing 'telegram' section in %s", telegramFile)
+		return TelegramConfig{}, fmt.Errorf("missing 'telegram' section in %s", telegramFile)
 	}
 	topicsSection, ok := tgSection["topics"].(map[string]interface{})
 	if !ok {
-		return nil, fmt.Errorf("missing 'telegram.topics' in %s", telegramFile)
+		return TelegramConfig{}, fmt.Errorf("missing 'telegram.topics' in %s", telegramFile)
 	}
 	// Explicit check for required topics
 	requiredTopics := []string{"shopping", "chores", "reminders"}
 	for _, topic := range requiredTopics {
 		if _, exists := topicsSection[topic]; !exists {
-			return nil, fmt.Errorf("missing required topic mapping 'telegram.topics.%s' in %s", topic, telegramFile)
+			return TelegramConfig{}, fmt.Errorf("missing required topic mapping 'telegram.topics.%s' in %s", topic, telegramFile)
 		}
 	}
 
@@ -170,27 +214,30 @@ func Load(opts Options) (*Config, error) {
 		Telegram TelegramConfig `yaml:"telegram"`
 	}
 	if err := yaml.Unmarshal(telegramBytes, &telegramWrapper); err != nil {
-		return nil, fmt.Errorf("error parsing %s: %w", telegramFile, err)
+		return TelegramConfig{}, fmt.Errorf("error parsing %s: %w", telegramFile, err)
 	}
 	if telegramWrapper.Telegram.ChatID == 0 {
-		return nil, fmt.Errorf("invalid telegram.chat_id in %s", telegramFile)
+		return TelegramConfig{}, fmt.Errorf("invalid telegram.chat_id in %s", telegramFile)
 	}
 	if telegramWrapper.Telegram.Topics.Shopping <= 0 {
-		return nil, fmt.Errorf("invalid or non-positive topic id for shopping in %s", telegramFile)
+		return TelegramConfig{}, fmt.Errorf("invalid or non-positive topic id for shopping in %s", telegramFile)
 	}
 	if telegramWrapper.Telegram.Topics.Chores <= 0 {
-		return nil, fmt.Errorf("invalid or non-positive topic id for chores in %s", telegramFile)
+		return TelegramConfig{}, fmt.Errorf("invalid or non-positive topic id for chores in %s", telegramFile)
 	}
 	if telegramWrapper.Telegram.Topics.Reminders <= 0 {
-		return nil, fmt.Errorf("invalid or non-positive topic id for reminders in %s", telegramFile)
+		return TelegramConfig{}, fmt.Errorf("invalid or non-positive topic id for reminders in %s", telegramFile)
 	}
+	return telegramWrapper.Telegram, nil
+}
 
-	// 5. Unmarshal app.yaml
+// parseApp unmarshals app.yaml and applies defaults for omitted settings.
+func parseApp(appBytes []byte, appFile string) (AppConfig, error) {
 	var appWrapper struct {
 		App AppConfig `yaml:"app"`
 	}
 	if err := yaml.Unmarshal(appBytes, &appWrapper); err != nil {
-		return nil, fmt.Errorf("error parsing %s: %w", appFile, err)
+		return AppConfig{}, fmt.Errorf("error parsing %s: %w", appFile, err)
 	}
 	app := appWrapper.App
 	if app.DefaultLocale == "" {
@@ -202,32 +249,28 @@ func Load(opts Options) (*Config, error) {
 	if app.Calendar.DefaultTimeOfDay == "" {
 		app.Calendar.DefaultTimeOfDay = "09:00"
 	}
+	return app, nil
+}
 
+// validateApp checks the default locale against the locales directory and validates intervals and times.
+func validateApp(app AppConfig, localesDir string) error {
 	// Validate default locale against locales dir
 	localeFile := filepath.Join(localesDir, app.DefaultLocale+".yaml")
 	if _, err := os.Stat(localeFile); os.IsNotExist(err) {
-		return nil, fmt.Errorf("unsupported default_locale %q: missing %s", app.DefaultLocale, localeFile)
+		return fmt.Errorf("unsupported default_locale %q: missing %s", app.DefaultLocale, localeFile)
 	}
 
 	// Validate intervals
 	if app.Notifications.UnresolvedReminderInterval <= 0 {
-		return nil, fmt.Errorf("unresolved_reminder_interval must be positive, got %v", app.Notifications.UnresolvedReminderInterval)
+		return fmt.Errorf("unresolved_reminder_interval must be positive, got %v", app.Notifications.UnresolvedReminderInterval)
 	}
 	if app.Flow.TTL <= 0 {
-		return nil, fmt.Errorf("flow.ttl must be positive, got %v", app.Flow.TTL)
+		return fmt.Errorf("flow.ttl must be positive, got %v", app.Flow.TTL)
 	}
 	if !timeOfDayRegex.MatchString(app.Calendar.DefaultTimeOfDay) {
-		return nil, fmt.Errorf("invalid default_time_of_day %q, expected HH:MM", app.Calendar.DefaultTimeOfDay)
+		return fmt.Errorf("invalid default_time_of_day %q, expected HH:MM", app.Calendar.DefaultTimeOfDay)
 	}
-
-	return &Config{
-		BotToken: botToken,
-		Timezone: tzStr,
-		Location: loc,
-		Users:    usersWrapper.Users,
-		Telegram: telegramWrapper.Telegram,
-		App:      app,
-	}, nil
+	return nil
 }
 
 func readAndCheckYAML(filePath string) ([]byte, error) {
@@ -254,7 +297,7 @@ func checkDisallowedKeys(node *yaml.Node, filePath string) error {
 		return nil
 	}
 	switch node.Kind {
-	case yaml.DocumentNode:
+	case yaml.DocumentNode, yaml.SequenceNode:
 		for _, child := range node.Content {
 			if err := checkDisallowedKeys(child, filePath); err != nil {
 				return err
@@ -271,12 +314,6 @@ func checkDisallowedKeys(node *yaml.Node, filePath string) error {
 				return fmt.Errorf("forbidden timezone key %q in %s: timezone must come from APP_TIMEZONE environment variable", keyNode.Value, filePath)
 			}
 			if err := checkDisallowedKeys(node.Content[i+1], filePath); err != nil {
-				return err
-			}
-		}
-	case yaml.SequenceNode:
-		for _, child := range node.Content {
-			if err := checkDisallowedKeys(child, filePath); err != nil {
 				return err
 			}
 		}

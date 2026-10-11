@@ -212,7 +212,7 @@ func (r *Router) handleFlowCallback(ctx context.Context, member *household.Membe
 func (r *Router) cancelOnlyMarkup(locale string) *InlineKeyboardMarkup {
 	return &InlineKeyboardMarkup{
 		InlineKeyboard: [][]InlineKeyboardButton{
-			{{Text: r.i18n.T(locale, "buttons.cancel"), CallbackData: "fl:c"}},
+			{{Text: r.i18n.T(locale, i18nKeyButtonCancel), CallbackData: "fl:c"}},
 		},
 	}
 }
@@ -234,8 +234,8 @@ func (r *Router) parseTypedDateOrTime(input string) (dateOnly string, dateTime t
 	}
 
 	// Try YYYY-MM-DD
-	if t, pErr := time.ParseInLocation("2006-01-02", trimmed, loc); pErr == nil {
-		return t.Format("2006-01-02"), time.Time{}, false, nil
+	if t, pErr := time.ParseInLocation(time.DateOnly, trimmed, loc); pErr == nil {
+		return t.Format(time.DateOnly), time.Time{}, false, nil
 	}
 
 	return "", time.Time{}, false, errors.New("invalid date format")

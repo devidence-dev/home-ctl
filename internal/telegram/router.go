@@ -50,25 +50,29 @@ type Router struct {
 	defaultTime timeOfDay
 }
 
+// RouterDeps groups the clients, domain services and infrastructure a Router depends on.
+type RouterDeps struct {
+	Client    Client
+	Household *household.Service
+	Shopping  *shopping.Service
+	Chores    *chores.Service
+	Reminders *reminders.Service
+	Flow      *flow.Manager
+	I18n      *i18n.Bundle
+	Clock     Clock
+	// Logger falls back to slog.Default when nil.
+	Logger *slog.Logger
+}
+
 // NewRouter constructs a Router.
-func NewRouter(
-	cfg RouterConfig,
-	client Client,
-	household *household.Service,
-	shopping *shopping.Service,
-	chores *chores.Service,
-	reminders *reminders.Service,
-	flow *flow.Manager,
-	i18n *i18n.Bundle,
-	clock Clock,
-	logger *slog.Logger,
-) *Router {
+func NewRouter(cfg RouterConfig, deps RouterDeps) *Router {
 	if cfg.DefaultLocale == "" {
 		cfg.DefaultLocale = "en"
 	}
 	if cfg.FlowTTL == 0 {
 		cfg.FlowTTL = 30 * time.Minute
 	}
+	logger := deps.Logger
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -81,14 +85,14 @@ func NewRouter(
 	}
 	return &Router{
 		cfg:       cfg,
-		client:    client,
-		household: household,
-		shopping:  shopping,
-		chores:    chores,
-		reminders: reminders,
-		flow:      flow,
-		i18n:      i18n,
-		clock:     clock,
+		client:    deps.Client,
+		household: deps.Household,
+		shopping:  deps.Shopping,
+		chores:    deps.Chores,
+		reminders: deps.Reminders,
+		flow:      deps.Flow,
+		i18n:      deps.I18n,
+		clock:     deps.Clock,
 		logger:    logger,
 
 		defaultTime: defaultTime,
@@ -123,13 +127,7 @@ func (r *Router) handleMessage(ctx context.Context, msg *Message) error {
 	// Authorize member
 	member, err := r.household.Authorize(ctx, userID)
 	if err != nil {
-		// If unconfigured user sends /start in private chat, reply that access is not configured
-		if isPrivate && strings.HasPrefix(msg.Text, "/start") {
-			_, _ = r.client.SendMessage(ctx, chatID, r.i18n.T(r.cfg.DefaultLocale, "general.not_member"), nil)
-			return nil
-		}
-		// In all other cases, reject without state creation
-		r.logger.Debug("ignoring message from unauthorized user", "user_id", userID)
+		r.rejectUnauthorizedMessage(ctx, msg, isPrivate)
 		return nil
 	}
 	if isPrivate {
@@ -164,57 +162,86 @@ func (r *Router) handleMessage(ctx context.Context, msg *Message) error {
 	}
 
 	if isPrivate {
-		switch cmd {
-		case "/start":
-			return r.handleStart(ctx, member, msg)
-		case "/help":
-			return r.handleHelp(ctx, member, msg)
-		case "/status":
-			return r.handleStatus(ctx, member, msg)
-		case "/list":
-			return r.handlePrivateList(ctx, member, msg)
-		default:
-			return r.handleHelp(ctx, member, msg)
-		}
+		return r.handlePrivateCommand(ctx, member, msg, cmd)
 	}
+	return r.handleGroupCommand(ctx, member, msg, cmd, locale)
+}
 
-	// Group chat commands
+// rejectUnauthorizedMessage handles a message from a user who is not a configured member.
+// Nothing is recorded; only an unconfigured user's /start in private chat gets a reply.
+func (r *Router) rejectUnauthorizedMessage(ctx context.Context, msg *Message, isPrivate bool) {
+	// If unconfigured user sends /start in private chat, reply that access is not configured
+	if isPrivate && strings.HasPrefix(msg.Text, "/start") {
+		_, _ = r.client.SendMessage(ctx, msg.Chat.ID, r.i18n.T(r.cfg.DefaultLocale, "general.not_member"), nil)
+		return
+	}
+	// In all other cases, reject without state creation
+	r.logger.Debug("ignoring message from unauthorized user", "user_id", msg.From.ID)
+}
+
+func (r *Router) handlePrivateCommand(ctx context.Context, member *household.Member, msg *Message, cmd string) error {
+	switch cmd {
+	case "/start":
+		return r.handleStart(ctx, member, msg)
+	case "/help":
+		return r.handleHelp(ctx, member, msg)
+	case "/status":
+		return r.handleStatus(ctx, member, msg)
+	case "/list":
+		return r.handlePrivateList(ctx, member, msg)
+	default:
+		return r.handleHelp(ctx, member, msg)
+	}
+}
+
+func (r *Router) handleGroupCommand(ctx context.Context, member *household.Member, msg *Message, cmd, locale string) error {
 	switch cmd {
 	case "/status":
 		return r.handleStatus(ctx, member, msg)
 	case "/help":
 		return r.handleHelp(ctx, member, msg)
 	case "/add":
-		switch msg.MessageThreadID {
-		case r.cfg.ShoppingTopicID:
-			return r.handleShoppingAdd(ctx, member, msg)
-		case r.cfg.ChoresTopicID:
-			return r.handleChoresAdd(ctx, member, msg)
-		case r.cfg.RemindersTopicID:
-			return r.handleRemindersAdd(ctx, member, msg)
-		default:
-			_, _ = r.client.SendMessage(ctx, chatID, r.i18n.T(locale, "general.unmapped_topic"), &SendOptions{
-				ThreadID: msg.MessageThreadID,
-			})
-			return nil
-		}
+		return r.handleTopicAdd(ctx, member, msg, locale)
 	case "/list":
-		switch msg.MessageThreadID {
-		case r.cfg.ShoppingTopicID:
-			return r.handleShoppingList(ctx, member, msg)
-		case r.cfg.ChoresTopicID:
-			return r.handleChoresListCommand(ctx, member, msg)
-		case r.cfg.RemindersTopicID:
-			return r.handleRemindersListCommand(ctx, member, msg)
-		default:
-			_, _ = r.client.SendMessage(ctx, chatID, r.i18n.T(locale, "general.unmapped_topic"), &SendOptions{
-				ThreadID: msg.MessageThreadID,
-			})
-			return nil
-		}
+		return r.handleTopicList(ctx, member, msg, locale)
 	}
-
 	return nil
+}
+
+// handleTopicAdd routes /add to the domain handler mapped to the topic it was sent in.
+func (r *Router) handleTopicAdd(ctx context.Context, member *household.Member, msg *Message, locale string) error {
+	switch msg.MessageThreadID {
+	case r.cfg.ShoppingTopicID:
+		return r.handleShoppingAdd(ctx, member, msg)
+	case r.cfg.ChoresTopicID:
+		return r.handleChoresAdd(ctx, member, msg)
+	case r.cfg.RemindersTopicID:
+		return r.handleRemindersAdd(ctx, member, msg)
+	default:
+		r.replyUnmappedTopic(ctx, msg, locale)
+		return nil
+	}
+}
+
+// handleTopicList routes /list to the domain handler mapped to the topic it was sent in.
+func (r *Router) handleTopicList(ctx context.Context, member *household.Member, msg *Message, locale string) error {
+	switch msg.MessageThreadID {
+	case r.cfg.ShoppingTopicID:
+		return r.handleShoppingList(ctx, member, msg)
+	case r.cfg.ChoresTopicID:
+		return r.handleChoresListCommand(ctx, member, msg)
+	case r.cfg.RemindersTopicID:
+		return r.handleRemindersListCommand(ctx, member, msg)
+	default:
+		r.replyUnmappedTopic(ctx, msg, locale)
+		return nil
+	}
+}
+
+func (r *Router) replyUnmappedTopic(ctx context.Context, msg *Message, locale string) {
+	_, _ = r.client.SendMessage(ctx, msg.Chat.ID, r.i18n.T(locale, "general.unmapped_topic"), &SendOptions{
+		ThreadID: msg.MessageThreadID,
+	})
 }
 
 // recordOnboarding connects an authorized member after any private interaction: a private message

@@ -137,7 +137,7 @@ func TestUnconnectedNotice_ConnectButton(t *testing.T) {
 			ChoresTopicID:    51,
 			RemindersTopicID: 63,
 			DefaultLocale:    "en",
-		}, env.client, env.household, env.shopping, env.chores, env.reminders, env.flow, env.i18n, env.clock, nil)
+		}, telegram.RouterDeps{Client: env.client, Household: env.household, Shopping: env.shopping, Chores: env.chores, Reminders: env.reminders, Flow: env.flow, I18n: env.i18n, Clock: env.clock})
 		if err := router.HandleUpdate(ctx, chorePrompt); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}

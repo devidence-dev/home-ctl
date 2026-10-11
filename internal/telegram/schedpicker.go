@@ -8,6 +8,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/px1/home-ctl/internal/recurrence"
 )
 
 var (
@@ -91,7 +93,7 @@ func RenderRecurrenceTypeStep(t PickerTranslator, locale string) (string, *Inlin
 				{Text: t.T(locale, "picker.rec_monthly"), CallbackData: FlowRecurrenceTypeCallback("monthly")},
 			},
 			{
-				{Text: t.T(locale, "buttons.cancel"), CallbackData: "fl:c"},
+				{Text: t.T(locale, i18nKeyButtonCancel), CallbackData: "fl:c"},
 			},
 		},
 	}
@@ -129,8 +131,8 @@ func RenderIntervalStep(t PickerTranslator, locale string, recType string) (stri
 			{Text: "12", CallbackData: FlowIntervalCallback("12")},
 		},
 		{
-			{Text: t.T(locale, "picker.btn_other"), CallbackData: FlowIntervalCallback("o")},
-			{Text: t.T(locale, "buttons.cancel"), CallbackData: "fl:c"},
+			{Text: t.T(locale, i18nKeyPickerBtnOther), CallbackData: FlowIntervalCallback("o")},
+			{Text: t.T(locale, i18nKeyButtonCancel), CallbackData: "fl:c"},
 		},
 	}
 
@@ -145,22 +147,46 @@ func RenderCalendarStep(t PickerTranslator, locale string, year int, month time.
 	curYear, curMonth, curDay := nowInLoc.Date()
 	todayDate := time.Date(curYear, curMonth, curDay, 0, 0, 0, 0, loc)
 
-	// Localized month name
-	monthsStr := t.T(locale, "picker.months")
-	monthNames := strings.Split(monthsStr, ",")
-	var monthName string
-	if int(month) >= 1 && int(month) <= len(monthNames) {
-		monthName = strings.TrimSpace(monthNames[month-1])
-	} else {
-		monthName = month.String()
-	}
-	headerTitle := fmt.Sprintf("%s %d", monthName, year)
+	navRow := calendarNavRow(t, locale, year, month, curYear, curMonth)
+	weekdayRow := calendarWeekdayRow(t, locale)
+	dayRows := calendarDayRows(year, month, todayDate, loc)
 
-	// Navigation buttons
+	shortcutRow := []InlineKeyboardButton{
+		{Text: t.T(locale, "picker.btn_today"), CallbackData: FlowDateCallback("today")},
+		{Text: t.T(locale, "picker.btn_tomorrow"), CallbackData: FlowDateCallback("tomorrow")},
+	}
+
+	actionRow := []InlineKeyboardButton{
+		{Text: t.T(locale, "picker.btn_type_date"), CallbackData: FlowDateCallback("type")},
+		{Text: t.T(locale, i18nKeyButtonCancel), CallbackData: "fl:c"},
+	}
+
+	allRows := make([][]InlineKeyboardButton, 0, 4+len(dayRows))
+	allRows = append(allRows, navRow, weekdayRow)
+	allRows = append(allRows, dayRows...)
+	allRows = append(allRows, shortcutRow, actionRow)
+
+	return prompt, &InlineKeyboardMarkup{InlineKeyboard: allRows}
+}
+
+// calendarMonthName returns the localized name of month.
+func calendarMonthName(t PickerTranslator, locale string, month time.Month) string {
+	monthNames := strings.Split(t.T(locale, "picker.months"), ",")
+	if int(month) >= 1 && int(month) <= len(monthNames) {
+		return strings.TrimSpace(monthNames[month-1])
+	}
+	return month.String()
+}
+
+// calendarNavRow renders previous month, the month title, and next month. The previous button
+// is a no-op for the current or a past month, so the calendar never offers to leave it.
+func calendarNavRow(t PickerTranslator, locale string, year int, month time.Month, curYear int, curMonth time.Month) []InlineKeyboardButton {
+	headerTitle := fmt.Sprintf("%s %d", calendarMonthName(t, locale, month), year)
+
 	isCurrentOrPastMonth := (year < curYear) || (year == curYear && month <= curMonth)
 	var prevBtn InlineKeyboardButton
 	if isCurrentOrPastMonth {
-		prevBtn = InlineKeyboardButton{Text: "◀", CallbackData: "fl:noop"}
+		prevBtn = InlineKeyboardButton{Text: "◀", CallbackData: string(CallbackFlowNoop)}
 	} else {
 		prevYear := year
 		prevMonth := int(month) - 1
@@ -174,7 +200,7 @@ func RenderCalendarStep(t PickerTranslator, locale string, year int, month time.
 		}
 	}
 
-	titleBtn := InlineKeyboardButton{Text: headerTitle, CallbackData: "fl:noop"}
+	titleBtn := InlineKeyboardButton{Text: headerTitle, CallbackData: string(CallbackFlowNoop)}
 
 	nextYear := year
 	nextMonth := int(month) + 1
@@ -187,11 +213,12 @@ func RenderCalendarStep(t PickerTranslator, locale string, year int, month time.
 		CallbackData: FlowCalendarCallback(fmt.Sprintf("%04d-%02d", nextYear, nextMonth)),
 	}
 
-	navRow := []InlineKeyboardButton{prevBtn, titleBtn, nextBtn}
+	return []InlineKeyboardButton{prevBtn, titleBtn, nextBtn}
+}
 
-	// Weekdays row, Monday first
-	weekdaysStr := t.T(locale, "datetime.weekdays")
-	rawWeekdays := strings.Split(weekdaysStr, ",")
+// calendarWeekdayRow renders the localized weekday names, Monday first.
+func calendarWeekdayRow(t PickerTranslator, locale string) []InlineKeyboardButton {
+	rawWeekdays := strings.Split(t.T(locale, "datetime.weekdays"), ",")
 	mondayFirstIndices := []int{1, 2, 3, 4, 5, 6, 0}
 	var weekdayRow []InlineKeyboardButton
 	for _, idx := range mondayFirstIndices {
@@ -201,11 +228,14 @@ func RenderCalendarStep(t PickerTranslator, locale string, year int, month time.
 		}
 		weekdayRow = append(weekdayRow, InlineKeyboardButton{
 			Text:         name,
-			CallbackData: "fl:noop",
+			CallbackData: string(CallbackFlowNoop),
 		})
 	}
+	return weekdayRow
+}
 
-	// Day buttons
+// calendarDayRows renders the month's days in rows of seven, Monday first. Days before today are inert.
+func calendarDayRows(year int, month time.Month, todayDate time.Time, loc *time.Location) [][]InlineKeyboardButton {
 	totalDays := time.Date(year, month+1, 0, 0, 0, 0, 0, time.UTC).Day()
 	firstDay := time.Date(year, month, 1, 0, 0, 0, 0, loc)
 	firstWeekday := firstDay.Weekday()
@@ -220,7 +250,7 @@ func RenderCalendarStep(t PickerTranslator, locale string, year int, month time.
 	var currentRow []InlineKeyboardButton
 
 	for i := 0; i < firstOffset; i++ {
-		currentRow = append(currentRow, InlineKeyboardButton{Text: " ", CallbackData: "fl:noop"})
+		currentRow = append(currentRow, calendarBlankButton())
 	}
 
 	for d := 1; d <= totalDays; d++ {
@@ -229,7 +259,7 @@ func RenderCalendarStep(t PickerTranslator, locale string, year int, month time.
 
 		var cb string
 		if isPast {
-			cb = "fl:noop"
+			cb = string(CallbackFlowNoop)
 		} else {
 			cb = FlowDateCallback(fmt.Sprintf("%04d-%02d-%02d", year, int(month), d))
 		}
@@ -247,27 +277,16 @@ func RenderCalendarStep(t PickerTranslator, locale string, year int, month time.
 
 	if len(currentRow) > 0 {
 		for len(currentRow) < 7 {
-			currentRow = append(currentRow, InlineKeyboardButton{Text: " ", CallbackData: "fl:noop"})
+			currentRow = append(currentRow, calendarBlankButton())
 		}
 		dayRows = append(dayRows, currentRow)
 	}
+	return dayRows
+}
 
-	shortcutRow := []InlineKeyboardButton{
-		{Text: t.T(locale, "picker.btn_today"), CallbackData: FlowDateCallback("today")},
-		{Text: t.T(locale, "picker.btn_tomorrow"), CallbackData: FlowDateCallback("tomorrow")},
-	}
-
-	actionRow := []InlineKeyboardButton{
-		{Text: t.T(locale, "picker.btn_type_date"), CallbackData: FlowDateCallback("type")},
-		{Text: t.T(locale, "buttons.cancel"), CallbackData: "fl:c"},
-	}
-
-	allRows := make([][]InlineKeyboardButton, 0, 4+len(dayRows))
-	allRows = append(allRows, navRow, weekdayRow)
-	allRows = append(allRows, dayRows...)
-	allRows = append(allRows, shortcutRow, actionRow)
-
-	return prompt, &InlineKeyboardMarkup{InlineKeyboard: allRows}
+// calendarBlankButton is the inert filler that pads the calendar grid.
+func calendarBlankButton() InlineKeyboardButton {
+	return InlineKeyboardButton{Text: " ", CallbackData: string(CallbackFlowNoop)}
 }
 
 // PickerContext holds the values already chosen in a scheduling flow; they head every step after the title.
@@ -289,7 +308,7 @@ func RenderContextHeader(t PickerTranslator, locale string, pc PickerContext, no
 		parts = append(parts, pc.Person)
 	}
 	if pc.Date != "" {
-		if day, err := time.ParseInLocation("2006-01-02", pc.Date, loc); err == nil {
+		if day, err := time.ParseInLocation(time.DateOnly, pc.Date, loc); err == nil {
 			monthName := day.Month().String()
 			if months := strings.Split(t.T(locale, "picker.months"), ","); int(day.Month()) <= len(months) {
 				monthName = strings.TrimSpace(months[day.Month()-1])
@@ -313,9 +332,57 @@ func RecurrenceText(t PickerTranslator, locale string, interval int, unit string
 	return t.T(locale, "general.recurrence_every_"+unit+"_other", interval)
 }
 
+// recurrenceTypeForUnit maps a stored recurrence unit to its flow recurrence type, or "" when unknown.
+func recurrenceTypeForUnit(unit string) string {
+	switch recurrence.Unit(unit) {
+	case recurrence.UnitDay:
+		return "daily"
+	case recurrence.UnitWeek:
+		return "weekly"
+	case recurrence.UnitMonth:
+		return "monthly"
+	}
+	return ""
+}
+
+// recurrenceUnitForType maps a flow recurrence type to its stored unit, or "" when unknown.
+func recurrenceUnitForType(recType string) string {
+	switch recType {
+	case "daily":
+		return string(recurrence.UnitDay)
+	case "weekly":
+		return string(recurrence.UnitWeek)
+	case "monthly":
+		return string(recurrence.UnitMonth)
+	}
+	return ""
+}
+
+// pickedDueAt combines the chosen day with the hour and minute in loc.
+func pickedDueAt(dueDate string, hour, minute int, loc *time.Location) time.Time {
+	dateT, _ := time.ParseInLocation(time.DateOnly, dueDate, loc)
+	return time.Date(dateT.Year(), dateT.Month(), dateT.Day(), hour, minute, 0, 0, loc)
+}
+
+// recurrenceRule builds the rule for a new definition from the flow's recurrence values, or nil for a one-off.
+func recurrenceRule(interval *int, unit, anchor *string) *recurrence.Rule {
+	if interval == nil || unit == nil {
+		return nil
+	}
+	ruleAnchor := recurrence.AnchorScheduled
+	if anchor != nil {
+		ruleAnchor = recurrence.Anchor(*anchor)
+	}
+	return &recurrence.Rule{
+		Interval: *interval,
+		Unit:     recurrence.Unit(*unit),
+		Anchor:   ruleAnchor,
+	}
+}
+
 // isToday reports whether dueDate (YYYY-MM-DD) is the current day in loc.
 func isToday(dueDate string, now time.Time, loc *time.Location) bool {
-	return dueDate != "" && now.In(loc).Format("2006-01-02") == dueDate
+	return dueDate != "" && now.In(loc).Format(time.DateOnly) == dueDate
 }
 
 // RenderHourStep renders the 24-hour grid (6 columns by 4 rows) with Change date.
@@ -332,7 +399,7 @@ func RenderHourStep(t PickerTranslator, locale string, dueDate string, now time.
 			h := r*6 + c
 			btn := InlineKeyboardButton{Text: fmt.Sprintf("%02d", h), CallbackData: FlowHourCallback(h)}
 			if today && h < nowHour {
-				btn = InlineKeyboardButton{Text: "·", CallbackData: "fl:noop"}
+				btn = InlineKeyboardButton{Text: "·", CallbackData: string(CallbackFlowNoop)}
 			}
 			row = append(row, btn)
 		}
@@ -341,7 +408,7 @@ func RenderHourStep(t PickerTranslator, locale string, dueDate string, now time.
 
 	rows = append(rows, []InlineKeyboardButton{
 		{Text: t.T(locale, "picker.btn_change_date"), CallbackData: "fl:d:back"},
-		{Text: t.T(locale, "buttons.cancel"), CallbackData: "fl:c"},
+		{Text: t.T(locale, i18nKeyButtonCancel), CallbackData: "fl:c"},
 	})
 
 	return prompt, &InlineKeyboardMarkup{InlineKeyboard: rows}
@@ -361,7 +428,7 @@ func RenderMinuteStep(t PickerTranslator, locale string, dueDate string, hour in
 			m := (r*4 + c) * 5
 			btn := InlineKeyboardButton{Text: fmt.Sprintf("%02d", m), CallbackData: FlowMinuteCallback(m)}
 			if today && (hour < local.Hour() || (hour == local.Hour() && m <= local.Minute())) {
-				btn = InlineKeyboardButton{Text: "·", CallbackData: "fl:noop"}
+				btn = InlineKeyboardButton{Text: "·", CallbackData: string(CallbackFlowNoop)}
 			}
 			row = append(row, btn)
 		}
@@ -369,8 +436,8 @@ func RenderMinuteStep(t PickerTranslator, locale string, dueDate string, hour in
 	}
 
 	rows = append(rows, []InlineKeyboardButton{
-		{Text: t.T(locale, "picker.btn_other"), CallbackData: "fl:mi:o"},
-		{Text: t.T(locale, "buttons.cancel"), CallbackData: "fl:c"},
+		{Text: t.T(locale, i18nKeyPickerBtnOther), CallbackData: "fl:mi:o"},
+		{Text: t.T(locale, i18nKeyButtonCancel), CallbackData: "fl:c"},
 	})
 
 	return prompt, &InlineKeyboardMarkup{InlineKeyboard: rows}
@@ -386,7 +453,7 @@ func RenderAnchorStep(t PickerTranslator, locale string) (string, *InlineKeyboar
 			{Text: t.T(locale, "picker.anchor_completion"), CallbackData: "fl:anc:completion"},
 		},
 		{
-			{Text: t.T(locale, "buttons.cancel"), CallbackData: "fl:c"},
+			{Text: t.T(locale, i18nKeyButtonCancel), CallbackData: "fl:c"},
 		},
 	}
 
@@ -412,9 +479,9 @@ func RenderEmojiStep(t PickerTranslator, locale string, suggestions []string) (s
 		rows[last] = append(rows[last], InlineKeyboardButton{Text: s, CallbackData: fmt.Sprintf("fl:em:%d", i)})
 	}
 	rows = append(rows, []InlineKeyboardButton{
-		{Text: t.T(locale, "picker.btn_other"), CallbackData: "fl:em:o"},
+		{Text: t.T(locale, i18nKeyPickerBtnOther), CallbackData: "fl:em:o"},
 		{Text: t.T(locale, "picker.btn_skip"), CallbackData: "fl:em:skip"},
-		{Text: t.T(locale, "buttons.cancel"), CallbackData: "fl:c"},
+		{Text: t.T(locale, i18nKeyButtonCancel), CallbackData: "fl:c"},
 	})
 
 	return prompt, &InlineKeyboardMarkup{InlineKeyboard: rows}
@@ -455,7 +522,7 @@ func RenderConfirmationStep(t PickerTranslator, locale string, s ConfirmationSum
 	rows := [][]InlineKeyboardButton{
 		{
 			{Text: t.T(locale, "buttons.confirm"), CallbackData: "fl:ok"},
-			{Text: t.T(locale, "buttons.cancel"), CallbackData: "fl:c"},
+			{Text: t.T(locale, i18nKeyButtonCancel), CallbackData: "fl:c"},
 		},
 	}
 

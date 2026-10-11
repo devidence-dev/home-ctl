@@ -14,7 +14,7 @@ func routerWithDefaultTime(t *testing.T, env *testEnv, tod string) *telegram.Rou
 	return telegram.NewRouter(telegram.RouterConfig{
 		ChatID: -1001234567890, ShoppingTopicID: 42, ChoresTopicID: 51, RemindersTopicID: 63,
 		DefaultLocale: "en", FlowTTL: 30 * time.Minute, DefaultTimeOfDay: tod,
-	}, env.client, env.household, env.shopping, env.chores, env.reminders, env.flow, env.i18n, env.clock, nil)
+	}, telegram.RouterDeps{Client: env.client, Household: env.household, Shopping: env.shopping, Chores: env.chores, Reminders: env.reminders, Flow: env.flow, I18n: env.i18n, Clock: env.clock})
 }
 
 // "Tomorrow" in due-date presets and in postponement must use the configured default time of day,

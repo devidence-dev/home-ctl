@@ -28,14 +28,8 @@ func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	logger.Info("starting homectl service")
 
-	configDir := os.Getenv("CONFIG_DIR")
-	if configDir == "" {
-		configDir = "config"
-	}
-	localesDir := os.Getenv("LOCALES_DIR")
-	if localesDir == "" {
-		localesDir = "locales"
-	}
+	configDir := envOrDefault("CONFIG_DIR", "config")
+	localesDir := envOrDefault("LOCALES_DIR", "locales")
 
 	cfg, err := config.Load(config.Options{
 		ConfigDir:  configDir,
@@ -126,23 +120,7 @@ func main() {
 		Logger:           logger,
 	})
 
-	go func() {
-		ticker := time.NewTicker(15 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if err := sched.ScanAndNotify(ctx); err != nil && !errors.Is(err, context.Canceled) {
-					logger.Error("scheduler scan error", "err", err)
-				}
-				if _, err := flMgr.Purge(ctx); err != nil && !errors.Is(err, context.Canceled) {
-					logger.Error("flow purge error", "err", err)
-				}
-			}
-		}
-	}()
+	go runScanLoop(ctx, logger, sched, flMgr)
 
 	router := telegram.NewRouter(
 		telegram.RouterConfig{
@@ -155,15 +133,17 @@ func main() {
 			DefaultTimeOfDay: cfg.App.Calendar.DefaultTimeOfDay,
 			BotUsername:      botUsername,
 		},
-		tgClient,
-		hhSvc,
-		shSvc,
-		chSvc,
-		reSvc,
-		flMgr,
-		bundle,
-		clk,
-		logger,
+		telegram.RouterDeps{
+			Client:    tgClient,
+			Household: hhSvc,
+			Shopping:  shSvc,
+			Chores:    chSvc,
+			Reminders: reSvc,
+			Flow:      flMgr,
+			I18n:      bundle,
+			Clock:     clk,
+			Logger:    logger,
+		},
 	)
 
 	dispatcher := telegram.NewDispatcher(tgClient, tgStore, router, logger)
@@ -175,4 +155,31 @@ func main() {
 	}
 
 	logger.Info("homectl service stopped gracefully")
+}
+
+// envOrDefault returns the value of the environment variable key, or fallback when it is unset or empty.
+func envOrDefault(key, fallback string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return fallback
+}
+
+// runScanLoop runs due-occurrence notifications and flow purges every 15 seconds until ctx is done.
+func runScanLoop(ctx context.Context, logger *slog.Logger, sched *scheduler.Scheduler, flMgr *flow.Manager) {
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := sched.ScanAndNotify(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				logger.Error("scheduler scan error", "err", err)
+			}
+			if _, err := flMgr.Purge(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				logger.Error("flow purge error", "err", err)
+			}
+		}
+	}
 }

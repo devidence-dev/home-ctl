@@ -41,7 +41,7 @@ func (r *Router) handleShoppingAdd(ctx context.Context, member *household.Member
 		text := r.i18n.T(locale, "shopping.prompt_new_item_name")
 		markup := &InlineKeyboardMarkup{
 			InlineKeyboard: [][]InlineKeyboardButton{
-				{{Text: r.i18n.T(locale, "buttons.cancel"), CallbackData: "fl:c"}},
+				{{Text: r.i18n.T(locale, i18nKeyButtonCancel), CallbackData: "fl:c"}},
 			},
 		}
 		return r.showFlowMessage(ctx, st, text, markup, true)
@@ -68,7 +68,7 @@ func (r *Router) handleShoppingAdd(ctx context.Context, member *household.Member
 
 	rows = append(rows, []InlineKeyboardButton{
 		{Text: r.i18n.T(locale, "buttons.add_new_item"), CallbackData: "fl:new"},
-		{Text: r.i18n.T(locale, "buttons.cancel"), CallbackData: "fl:c"},
+		{Text: r.i18n.T(locale, i18nKeyButtonCancel), CallbackData: "fl:c"},
 	})
 
 	text := r.i18n.T(locale, "shopping.prompt_select")
@@ -197,7 +197,7 @@ func (r *Router) handleShoppingFlowText(ctx context.Context, member *household.M
 		prompt := r.i18n.T(locale, "shopping.prompt_new_item_emoji")
 		markup := &InlineKeyboardMarkup{
 			InlineKeyboard: [][]InlineKeyboardButton{
-				{{Text: r.i18n.T(locale, "buttons.cancel"), CallbackData: "fl:c"}},
+				{{Text: r.i18n.T(locale, i18nKeyButtonCancel), CallbackData: "fl:c"}},
 			},
 		}
 		return r.reanchorFlow(ctx, state, func() error {
@@ -257,7 +257,7 @@ func (r *Router) handleShoppingFlowCallback(ctx context.Context, member *househo
 		prompt := r.i18n.T(locale, "shopping.prompt_new_item_name")
 		markup := &InlineKeyboardMarkup{
 			InlineKeyboard: [][]InlineKeyboardButton{
-				{{Text: r.i18n.T(locale, "buttons.cancel"), CallbackData: "fl:c"}},
+				{{Text: r.i18n.T(locale, i18nKeyButtonCancel), CallbackData: "fl:c"}},
 			},
 		}
 		return r.showFlowMessage(ctx, st, prompt, markup, true)

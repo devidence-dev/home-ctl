@@ -304,7 +304,16 @@ func setupTestEnv() (*testEnv, error) {
 		BotUsername:      "home_ctl_bot",
 	}
 
-	router := telegram.NewRouter(cfg, client, hhSvc, shSvc, chSvc, reSvc, flMgr, bundle, clock, nil)
+	router := telegram.NewRouter(cfg, telegram.RouterDeps{
+		Client:    client,
+		Household: hhSvc,
+		Shopping:  shSvc,
+		Chores:    chSvc,
+		Reminders: reSvc,
+		Flow:      flMgr,
+		I18n:      bundle,
+		Clock:     clock,
+	})
 
 	return &testEnv{
 		router:    router,

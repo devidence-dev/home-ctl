@@ -31,8 +31,8 @@ type State struct {
 	MessageID int64     `json:"message_id,omitempty"`
 }
 
-// Clock provides current time.
-type Clock interface {
+// Nower provides current time.
+type Nower interface {
 	Now() time.Time
 }
 
@@ -49,11 +49,11 @@ type Store interface {
 // Manager orchestrates flow operations with typed payload serialization.
 type Manager struct {
 	store Store
-	clock Clock
+	clock Nower
 }
 
 // NewManager creates a flow Manager.
-func NewManager(store Store, clock Clock) *Manager {
+func NewManager(store Store, clock Nower) *Manager {
 	return &Manager{
 		store: store,
 		clock: clock,

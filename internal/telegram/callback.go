@@ -80,230 +80,182 @@ func ParseCallbackData(data string, actorID int64) (*ParsedCallback, error) {
 	}
 
 	prefix := parts[0] + ":" + parts[1]
-	switch CallbackKind(prefix) {
-	case CallbackShoppingPurchase:
-		if len(parts) != 3 {
-			return nil, ErrMalformedCallback
-		}
-		id, err := strconv.ParseInt(parts[2], 10, 64)
-		if err != nil {
-			return nil, ErrMalformedCallback
-		}
-		return &ParsedCallback{Kind: CallbackShoppingPurchase, TargetID: id, ActorID: actorID}, nil
+	return parsePrefixedCallback(CallbackKind(prefix), parts, actorID)
+}
 
-	case CallbackChoreComplete:
-		if len(parts) != 3 {
-			return nil, ErrMalformedCallback
-		}
-		id, err := strconv.ParseInt(parts[2], 10, 64)
-		if err != nil {
-			return nil, ErrMalformedCallback
-		}
-		return &ParsedCallback{Kind: CallbackChoreComplete, TargetID: id, ActorID: actorID}, nil
-
-	case CallbackChoreDetail:
-		if len(parts) != 3 {
-			return nil, ErrMalformedCallback
-		}
-		id, err := strconv.ParseInt(parts[2], 10, 64)
-		if err != nil {
-			return nil, ErrMalformedCallback
-		}
-		return &ParsedCallback{Kind: CallbackChoreDetail, TargetID: id, ActorID: actorID}, nil
-
-	case CallbackChorePostpone:
-		if len(parts) == 3 {
-			id, err := strconv.ParseInt(parts[2], 10, 64)
-			if err != nil {
-				return nil, ErrMalformedCallback
-			}
-			return &ParsedCallback{Kind: CallbackChorePostpone, TargetID: id, ActorID: actorID}, nil
-		}
-		if len(parts) == 4 {
-			id, err := strconv.ParseInt(parts[2], 10, 64)
-			if err != nil {
-				return nil, ErrMalformedCallback
-			}
-			return &ParsedCallback{Kind: CallbackChorePostpone, TargetID: id, Payload: parts[3], ActorID: actorID}, nil
-		}
-		return nil, ErrMalformedCallback
-
-	case CallbackReminderComplete:
-		if len(parts) != 3 {
-			return nil, ErrMalformedCallback
-		}
-		id, err := strconv.ParseInt(parts[2], 10, 64)
-		if err != nil {
-			return nil, ErrMalformedCallback
-		}
-		return &ParsedCallback{Kind: CallbackReminderComplete, TargetID: id, ActorID: actorID}, nil
-
-	case CallbackReminderDetail:
-		if len(parts) != 3 {
-			return nil, ErrMalformedCallback
-		}
-		id, err := strconv.ParseInt(parts[2], 10, 64)
-		if err != nil {
-			return nil, ErrMalformedCallback
-		}
-		return &ParsedCallback{Kind: CallbackReminderDetail, TargetID: id, ActorID: actorID}, nil
-
-	case CallbackReminderPostpone:
-		if len(parts) == 3 {
-			id, err := strconv.ParseInt(parts[2], 10, 64)
-			if err != nil {
-				return nil, ErrMalformedCallback
-			}
-			return &ParsedCallback{Kind: CallbackReminderPostpone, TargetID: id, ActorID: actorID}, nil
-		}
-		if len(parts) == 4 {
-			id, err := strconv.ParseInt(parts[2], 10, 64)
-			if err != nil {
-				return nil, ErrMalformedCallback
-			}
-			return &ParsedCallback{Kind: CallbackReminderPostpone, TargetID: id, Payload: parts[3], ActorID: actorID}, nil
-		}
-		return nil, ErrMalformedCallback
-
-	case CallbackFlowSelect:
-		if len(parts) != 3 {
-			return nil, ErrMalformedCallback
-		}
-		id, err := strconv.ParseInt(parts[2], 10, 64)
-		if err != nil {
-			return nil, ErrMalformedCallback
-		}
-		return &ParsedCallback{Kind: CallbackFlowSelect, TargetID: id, ActorID: actorID}, nil
-
-	case CallbackFlowUser:
-		if len(parts) != 3 {
-			return nil, ErrMalformedCallback
-		}
-		id, err := strconv.ParseInt(parts[2], 10, 64)
-		if err != nil {
-			return nil, ErrMalformedCallback
-		}
-		return &ParsedCallback{Kind: CallbackFlowUser, TargetID: id, ActorID: actorID}, nil
-
-	case CallbackFlowDue:
-		if len(parts) != 3 {
-			return nil, ErrMalformedCallback
-		}
-		return &ParsedCallback{Kind: CallbackFlowDue, Payload: parts[2], ActorID: actorID}, nil
-
-	case CallbackFlowRecurrence:
-		if len(parts) != 3 {
-			return nil, ErrMalformedCallback
-		}
-		return &ParsedCallback{Kind: CallbackFlowRecurrence, Payload: parts[2], ActorID: actorID}, nil
-
-	case CallbackFlowAnchor:
-		if len(parts) != 3 {
-			return nil, ErrMalformedCallback
-		}
-		return &ParsedCallback{Kind: CallbackFlowAnchor, Payload: parts[2], ActorID: actorID}, nil
-
+// parsePrefixedCallback dispatches prefixed callback data to the parser for its kind.
+func parsePrefixedCallback(kind CallbackKind, parts []string, actorID int64) (*ParsedCallback, error) {
+	switch kind {
+	case CallbackShoppingPurchase, CallbackChoreComplete, CallbackChoreDetail,
+		CallbackReminderComplete, CallbackReminderDetail, CallbackFlowSelect, CallbackFlowUser:
+		return parseTargetCallback(kind, parts, actorID)
+	case CallbackChorePostpone, CallbackReminderPostpone:
+		return parsePostponeCallback(kind, parts, actorID)
+	case CallbackFlowDue, CallbackFlowRecurrence, CallbackFlowAnchor:
+		return parseTextPayloadCallback(kind, parts, actorID)
 	case CallbackFlowRecurrenceType:
-		if len(parts) != 3 {
-			return nil, ErrMalformedCallback
-		}
-		rt := parts[2]
-		if rt != "daily" && rt != "weekly" && rt != "monthly" && rt != "once" {
-			return nil, ErrMalformedCallback
-		}
-		return &ParsedCallback{Kind: CallbackFlowRecurrenceType, Payload: rt, ActorID: actorID}, nil
-
+		return parseRecurrenceTypeCallback(parts, actorID)
 	case CallbackFlowInterval:
-		if len(parts) != 3 {
-			return nil, ErrMalformedCallback
-		}
-		if parts[2] == "o" {
-			return &ParsedCallback{Kind: CallbackFlowInterval, Payload: "o", ActorID: actorID}, nil
-		}
-		n, err := strconv.Atoi(parts[2])
-		if err != nil || n < 1 || n > 99 {
-			return nil, ErrMalformedCallback
-		}
-		return &ParsedCallback{Kind: CallbackFlowInterval, TargetID: int64(n), Payload: parts[2], ActorID: actorID}, nil
-
+		return parseIntervalCallback(parts, actorID)
 	case CallbackFlowCalendar:
-		if len(parts) != 3 {
-			return nil, ErrMalformedCallback
-		}
-		calParts := strings.Split(parts[2], "-")
-		if len(calParts) != 2 || len(calParts[0]) != 4 || len(calParts[1]) != 2 {
-			return nil, ErrMalformedCallback
-		}
-		y, err1 := strconv.Atoi(calParts[0])
-		m, err2 := strconv.Atoi(calParts[1])
-		if err1 != nil || err2 != nil || y < 2000 || y > 2100 || m < 1 || m > 12 {
-			return nil, ErrMalformedCallback
-		}
-		return &ParsedCallback{Kind: CallbackFlowCalendar, Payload: parts[2], ActorID: actorID}, nil
-
+		return parseCalendarCallback(parts, actorID)
 	case CallbackFlowDate:
-		if len(parts) != 3 {
-			return nil, ErrMalformedCallback
-		}
-		d := parts[2]
-		if d == "today" || d == "tomorrow" || d == "type" || d == "back" {
-			return &ParsedCallback{Kind: CallbackFlowDate, Payload: d, ActorID: actorID}, nil
-		}
-		dParts := strings.Split(d, "-")
-		if len(dParts) != 3 || len(dParts[0]) != 4 || len(dParts[1]) != 2 || len(dParts[2]) != 2 {
-			return nil, ErrMalformedCallback
-		}
-		y, err1 := strconv.Atoi(dParts[0])
-		m, err2 := strconv.Atoi(dParts[1])
-		day, err3 := strconv.Atoi(dParts[2])
-		if err1 != nil || err2 != nil || err3 != nil || y < 2000 || y > 2100 || m < 1 || m > 12 || day < 1 || day > 31 {
-			return nil, ErrMalformedCallback
-		}
-		return &ParsedCallback{Kind: CallbackFlowDate, Payload: d, ActorID: actorID}, nil
-
+		return parseDateCallback(parts, actorID)
 	case CallbackFlowHour:
-		if len(parts) != 3 || len(parts[2]) != 2 {
-			return nil, ErrMalformedCallback
-		}
-		h, err := strconv.Atoi(parts[2])
-		if err != nil || h < 0 || h > 23 {
-			return nil, ErrMalformedCallback
-		}
-		return &ParsedCallback{Kind: CallbackFlowHour, TargetID: int64(h), Payload: parts[2], ActorID: actorID}, nil
-
+		return parseHourCallback(parts, actorID)
 	case CallbackFlowMinute:
-		if len(parts) != 3 {
-			return nil, ErrMalformedCallback
-		}
-		if parts[2] == "o" {
-			return &ParsedCallback{Kind: CallbackFlowMinute, Payload: "o", ActorID: actorID}, nil
-		}
-		if len(parts[2]) != 2 {
-			return nil, ErrMalformedCallback
-		}
-		mi, err := strconv.Atoi(parts[2])
-		if err != nil || mi < 0 || mi > 59 {
-			return nil, ErrMalformedCallback
-		}
-		return &ParsedCallback{Kind: CallbackFlowMinute, TargetID: int64(mi), Payload: parts[2], ActorID: actorID}, nil
-
+		return parseMinuteCallback(parts, actorID)
 	case CallbackFlowEmoji:
-		if len(parts) != 3 {
-			return nil, ErrMalformedCallback
-		}
-		if parts[2] == "o" || parts[2] == "skip" {
-			return &ParsedCallback{Kind: CallbackFlowEmoji, Payload: parts[2], ActorID: actorID}, nil
-		}
-		// The index is checked against the locale suggestion list by the handler.
-		n, err := strconv.Atoi(parts[2])
-		if err != nil || n < 0 || n > 99 {
-			return nil, ErrMalformedCallback
-		}
-		return &ParsedCallback{Kind: CallbackFlowEmoji, TargetID: int64(n), Payload: parts[2], ActorID: actorID}, nil
-
+		return parseEmojiCallback(parts, actorID)
 	default:
 		return nil, ErrMalformedCallback
 	}
+}
+
+// parseTargetCallback parses "<prefix>:<id>" callback data.
+func parseTargetCallback(kind CallbackKind, parts []string, actorID int64) (*ParsedCallback, error) {
+	if len(parts) != 3 {
+		return nil, ErrMalformedCallback
+	}
+	id, err := strconv.ParseInt(parts[2], 10, 64)
+	if err != nil {
+		return nil, ErrMalformedCallback
+	}
+	return &ParsedCallback{Kind: kind, TargetID: id, ActorID: actorID}, nil
+}
+
+// parsePostponeCallback parses "<prefix>:<id>" or "<prefix>:<id>:<payload>" callback data.
+func parsePostponeCallback(kind CallbackKind, parts []string, actorID int64) (*ParsedCallback, error) {
+	if len(parts) != 3 && len(parts) != 4 {
+		return nil, ErrMalformedCallback
+	}
+	id, err := strconv.ParseInt(parts[2], 10, 64)
+	if err != nil {
+		return nil, ErrMalformedCallback
+	}
+	parsed := &ParsedCallback{Kind: kind, TargetID: id, ActorID: actorID}
+	if len(parts) == 4 {
+		parsed.Payload = parts[3]
+	}
+	return parsed, nil
+}
+
+// parseTextPayloadCallback parses "<prefix>:<payload>" callback data without further validation.
+func parseTextPayloadCallback(kind CallbackKind, parts []string, actorID int64) (*ParsedCallback, error) {
+	if len(parts) != 3 {
+		return nil, ErrMalformedCallback
+	}
+	return &ParsedCallback{Kind: kind, Payload: parts[2], ActorID: actorID}, nil
+}
+
+func parseRecurrenceTypeCallback(parts []string, actorID int64) (*ParsedCallback, error) {
+	if len(parts) != 3 {
+		return nil, ErrMalformedCallback
+	}
+	rt := parts[2]
+	if rt != "daily" && rt != "weekly" && rt != "monthly" && rt != "once" {
+		return nil, ErrMalformedCallback
+	}
+	return &ParsedCallback{Kind: CallbackFlowRecurrenceType, Payload: rt, ActorID: actorID}, nil
+}
+
+func parseIntervalCallback(parts []string, actorID int64) (*ParsedCallback, error) {
+	if len(parts) != 3 {
+		return nil, ErrMalformedCallback
+	}
+	if parts[2] == "o" {
+		return &ParsedCallback{Kind: CallbackFlowInterval, Payload: "o", ActorID: actorID}, nil
+	}
+	n, err := strconv.Atoi(parts[2])
+	if err != nil || n < 1 || n > 99 {
+		return nil, ErrMalformedCallback
+	}
+	return &ParsedCallback{Kind: CallbackFlowInterval, TargetID: int64(n), Payload: parts[2], ActorID: actorID}, nil
+}
+
+func parseCalendarCallback(parts []string, actorID int64) (*ParsedCallback, error) {
+	if len(parts) != 3 {
+		return nil, ErrMalformedCallback
+	}
+	calParts := strings.Split(parts[2], "-")
+	if len(calParts) != 2 || len(calParts[0]) != 4 || len(calParts[1]) != 2 {
+		return nil, ErrMalformedCallback
+	}
+	y, err1 := strconv.Atoi(calParts[0])
+	m, err2 := strconv.Atoi(calParts[1])
+	if err1 != nil || err2 != nil || y < 2000 || y > 2100 || m < 1 || m > 12 {
+		return nil, ErrMalformedCallback
+	}
+	return &ParsedCallback{Kind: CallbackFlowCalendar, Payload: parts[2], ActorID: actorID}, nil
+}
+
+func parseDateCallback(parts []string, actorID int64) (*ParsedCallback, error) {
+	if len(parts) != 3 {
+		return nil, ErrMalformedCallback
+	}
+	d := parts[2]
+	if d == "today" || d == "tomorrow" || d == "type" || d == "back" {
+		return &ParsedCallback{Kind: CallbackFlowDate, Payload: d, ActorID: actorID}, nil
+	}
+	if !isDateString(d) {
+		return nil, ErrMalformedCallback
+	}
+	return &ParsedCallback{Kind: CallbackFlowDate, Payload: d, ActorID: actorID}, nil
+}
+
+// isDateString reports whether d is a YYYY-MM-DD date within the supported calendar range.
+func isDateString(d string) bool {
+	dParts := strings.Split(d, "-")
+	if len(dParts) != 3 || len(dParts[0]) != 4 || len(dParts[1]) != 2 || len(dParts[2]) != 2 {
+		return false
+	}
+	y, err1 := strconv.Atoi(dParts[0])
+	m, err2 := strconv.Atoi(dParts[1])
+	day, err3 := strconv.Atoi(dParts[2])
+	return err1 == nil && err2 == nil && err3 == nil && y >= 2000 && y <= 2100 && m >= 1 && m <= 12 && day >= 1 && day <= 31
+}
+
+func parseHourCallback(parts []string, actorID int64) (*ParsedCallback, error) {
+	if len(parts) != 3 || len(parts[2]) != 2 {
+		return nil, ErrMalformedCallback
+	}
+	h, err := strconv.Atoi(parts[2])
+	if err != nil || h < 0 || h > 23 {
+		return nil, ErrMalformedCallback
+	}
+	return &ParsedCallback{Kind: CallbackFlowHour, TargetID: int64(h), Payload: parts[2], ActorID: actorID}, nil
+}
+
+func parseMinuteCallback(parts []string, actorID int64) (*ParsedCallback, error) {
+	if len(parts) != 3 {
+		return nil, ErrMalformedCallback
+	}
+	if parts[2] == "o" {
+		return &ParsedCallback{Kind: CallbackFlowMinute, Payload: "o", ActorID: actorID}, nil
+	}
+	if len(parts[2]) != 2 {
+		return nil, ErrMalformedCallback
+	}
+	mi, err := strconv.Atoi(parts[2])
+	if err != nil || mi < 0 || mi > 59 {
+		return nil, ErrMalformedCallback
+	}
+	return &ParsedCallback{Kind: CallbackFlowMinute, TargetID: int64(mi), Payload: parts[2], ActorID: actorID}, nil
+}
+
+func parseEmojiCallback(parts []string, actorID int64) (*ParsedCallback, error) {
+	if len(parts) != 3 {
+		return nil, ErrMalformedCallback
+	}
+	if parts[2] == "o" || parts[2] == "skip" {
+		return &ParsedCallback{Kind: CallbackFlowEmoji, Payload: parts[2], ActorID: actorID}, nil
+	}
+	// The index is checked against the locale suggestion list by the handler.
+	n, err := strconv.Atoi(parts[2])
+	if err != nil || n < 0 || n > 99 {
+		return nil, ErrMalformedCallback
+	}
+	return &ParsedCallback{Kind: CallbackFlowEmoji, TargetID: int64(n), Payload: parts[2], ActorID: actorID}, nil
 }
 
 // FlowRecurrenceTypeCallback returns callback data for a recurrence type.

@@ -43,6 +43,21 @@ func RegisterCommands(ctx context.Context, client Client, translator Translator,
 		},
 	}
 
+	langs := commandLanguages(locales)
+
+	for _, target := range targets {
+		for _, lang := range langs {
+			cmds := localizedCommands(translator, lang, target.scopeName, target.commands)
+
+			if err := client.SetMyCommands(ctx, target.scope, lang, cmds); err != nil {
+				logger.Error("failed to register bot commands", "scope", target.scopeName, "lang", lang, "err", err)
+			}
+		}
+	}
+}
+
+// commandLanguages returns the default language ("") followed by each distinct locale, in order.
+func commandLanguages(locales []string) []string {
 	langs := []string{""}
 	seen := map[string]bool{"": true}
 	for _, l := range locales {
@@ -51,26 +66,23 @@ func RegisterCommands(ctx context.Context, client Client, translator Translator,
 			langs = append(langs, l)
 		}
 	}
+	return langs
+}
 
-	for _, target := range targets {
-		for _, lang := range langs {
-			cmds := make([]BotCommand, len(target.commands))
-			for i, name := range target.commands {
-				key := fmt.Sprintf("telegram.commands.%s.description", name)
-				// ponytail: private /list covers chores and reminders only, so it gets its own text
-				// instead of the group wording that also mentions items.
-				if target.scopeName == "private" && name == "list" {
-					key = "telegram.commands.private_list.description"
-				}
-				cmds[i] = BotCommand{
-					Command:     name,
-					Description: translator.T(lang, key),
-				}
-			}
-
-			if err := client.SetMyCommands(ctx, target.scope, lang, cmds); err != nil {
-				logger.Error("failed to register bot commands", "scope", target.scopeName, "lang", lang, "err", err)
-			}
+// localizedCommands builds the command menu for one scope in one language.
+func localizedCommands(translator Translator, lang, scopeName string, names []string) []BotCommand {
+	cmds := make([]BotCommand, len(names))
+	for i, name := range names {
+		key := fmt.Sprintf("telegram.commands.%s.description", name)
+		// ponytail: private /list covers chores and reminders only, so it gets its own text
+		// instead of the group wording that also mentions items.
+		if scopeName == "private" && name == "list" {
+			key = "telegram.commands.private_list.description"
+		}
+		cmds[i] = BotCommand{
+			Command:     name,
+			Description: translator.T(lang, key),
 		}
 	}
+	return cmds
 }

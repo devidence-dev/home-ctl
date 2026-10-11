@@ -15,8 +15,8 @@ import (
 	"github.com/px1/home-ctl/internal/reminders"
 )
 
-// Clock provides current time.
-type Clock interface {
+// Nower provides current time.
+type Nower interface {
 	Now() time.Time
 }
 
@@ -34,7 +34,7 @@ type Scheduler struct {
 	notifStore       notification.Store
 	notifier         notification.Notifier
 	onboarding       OnboardingChecker
-	clock            Clock
+	clock            Nower
 	reminderInterval time.Duration
 	logger           *slog.Logger
 }
@@ -47,7 +47,7 @@ type Config struct {
 	NotifStore       notification.Store
 	Notifier         notification.Notifier
 	Onboarding       OnboardingChecker
-	Clock            Clock
+	Clock            Nower
 	ReminderInterval time.Duration
 	Logger           *slog.Logger
 }
