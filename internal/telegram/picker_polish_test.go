@@ -85,7 +85,7 @@ func TestRenderHourStep_PastHoursInertOnlyToday(t *testing.T) {
 			t.Errorf("today hour %02d: inert=%v, want %v (%+v)", h, inert, h < 14, btn)
 		}
 	}
-	if change := today.InlineKeyboard[4][0]; change.CallbackData != "fl:d:back" || change.Text != "Change date" {
+	if change := today.InlineKeyboard[4][0]; change.CallbackData != "fl:d:back" || change.Text != "🔄 Change date" {
 		t.Errorf("expected Change date button, got %+v", change)
 	}
 

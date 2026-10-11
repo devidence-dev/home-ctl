@@ -99,19 +99,15 @@ func RenderRecurrenceTypeStep(t PickerTranslator, locale string) (string, *Inlin
 
 // RenderIntervalStep renders the interval selection grid (1-12 plus Other) and prompt.
 func RenderIntervalStep(t PickerTranslator, locale string, recType string) (string, *InlineKeyboardMarkup) {
-	var unit string
+	// One whole question per unit: Spanish needs "cuántos días" but "cuántas semanas".
+	key := "picker.prompt_interval_days"
 	switch recType {
-	case "daily":
-		unit = t.T(locale, "picker.unit_days")
 	case "weekly":
-		unit = t.T(locale, "picker.unit_weeks")
+		key = "picker.prompt_interval_weeks"
 	case "monthly":
-		unit = t.T(locale, "picker.unit_months")
-	default:
-		unit = ""
+		key = "picker.prompt_interval_months"
 	}
-
-	prompt := t.T(locale, "picker.prompt_interval", unit)
+	prompt := t.T(locale, key)
 
 	rows := [][]InlineKeyboardButton{
 		{

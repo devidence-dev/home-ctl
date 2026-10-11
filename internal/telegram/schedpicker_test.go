@@ -104,8 +104,23 @@ func TestRenderers_EnglishAndSpanish(t *testing.T) {
 
 	// 2. Interval step
 	textIv, kbIv := telegram.RenderIntervalStep(bundle, "en", "weekly")
-	if !strings.Contains(textIv, "Repeat every how many weeks?") || strings.Contains(textIv, "(s)") {
+	if !strings.Contains(textIv, "🔁 Every how many weeks?") || strings.Contains(textIv, "(s)") {
 		t.Errorf("expected plural unit weeks in interval text, got %q", textIv)
+	}
+	// Spanish needs one whole question per unit because of grammatical gender.
+	for recType, want := range map[string]string{
+		"daily":   "🔁 ¿Cada cuántos días?",
+		"weekly":  "🔁 ¿Cada cuántas semanas?",
+		"monthly": "🔁 ¿Cada cuántos meses?",
+	} {
+		if got, _ := telegram.RenderIntervalStep(bundle, "es", recType); !strings.Contains(got, want) {
+			t.Errorf("ES %s interval prompt: want %q, got %q", recType, want, got)
+		}
+	}
+	// Recurrence types are told apart by their icons.
+	_, kbRec := telegram.RenderRecurrenceTypeStep(bundle, "es")
+	if got := kbRec.InlineKeyboard[0][1].Text + "|" + kbRec.InlineKeyboard[1][0].Text + "|" + kbRec.InlineKeyboard[1][1].Text; got != "☀️ Diaria|📅 Semanal|🗓️ Mensual" {
+		t.Errorf("unexpected ES recurrence buttons: %q", got)
 	}
 	if len(kbIv.InlineKeyboard) != 4 {
 		t.Fatalf("expected 4 rows in interval keyboard, got %d", len(kbIv.InlineKeyboard))
@@ -115,7 +130,7 @@ func TestRenderers_EnglishAndSpanish(t *testing.T) {
 		t.Errorf("unexpected interval buttons: 1=%s, 12=%s", kbIv.InlineKeyboard[0][0].Text, kbIv.InlineKeyboard[2][3].Text)
 	}
 	// Check other button
-	if kbIv.InlineKeyboard[3][0].CallbackData != "fl:iv:o" || kbIv.InlineKeyboard[3][0].Text != "Other" {
+	if kbIv.InlineKeyboard[3][0].CallbackData != "fl:iv:o" || kbIv.InlineKeyboard[3][0].Text != "✍️ Other" {
 		t.Errorf("unexpected Other button: %+v", kbIv.InlineKeyboard[3][0])
 	}
 
@@ -215,15 +230,15 @@ func TestRenderers_EnglishAndSpanish(t *testing.T) {
 
 	// Shortcut rows
 	shortcuts := calKbEN.InlineKeyboard[len(calKbEN.InlineKeyboard)-2]
-	if shortcuts[0].Text != "Today" || shortcuts[0].CallbackData != "fl:d:today" {
+	if shortcuts[0].Text != "☀️ Today" || shortcuts[0].CallbackData != "fl:d:today" {
 		t.Errorf("unexpected Today shortcut: %+v", shortcuts[0])
 	}
-	if shortcuts[1].Text != "Tomorrow" || shortcuts[1].CallbackData != "fl:d:tomorrow" {
+	if shortcuts[1].Text != "🌅 Tomorrow" || shortcuts[1].CallbackData != "fl:d:tomorrow" {
 		t.Errorf("unexpected Tomorrow shortcut: %+v", shortcuts[1])
 	}
 
 	actions := calKbEN.InlineKeyboard[len(calKbEN.InlineKeyboard)-1]
-	if actions[0].Text != "Type date" || actions[0].CallbackData != "fl:d:type" {
+	if actions[0].Text != "⌨️ Type date" || actions[0].CallbackData != "fl:d:type" {
 		t.Errorf("unexpected Type date action: %+v", actions[0])
 	}
 	if actions[1].Text != "❌ Cancel" || actions[1].CallbackData != "fl:c" {
@@ -246,7 +261,7 @@ func TestRenderers_EnglishAndSpanish(t *testing.T) {
 	}
 
 	shortcutsES := calKbES.InlineKeyboard[len(calKbES.InlineKeyboard)-2]
-	if shortcutsES[0].Text != "Hoy" || shortcutsES[1].Text != "Mañana" {
+	if shortcutsES[0].Text != "☀️ Hoy" || shortcutsES[1].Text != "🌅 Mañana" {
 		t.Errorf("expected Hoy and Mañana shortcuts in Spanish, got %s and %s", shortcutsES[0].Text, shortcutsES[1].Text)
 	}
 
