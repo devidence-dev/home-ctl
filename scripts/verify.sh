@@ -7,7 +7,7 @@ cd "$ROOT_DIR"
 CACHE_DIR="${HOME}/.cache/homectl"
 mkdir -p "${CACHE_DIR}/gocache" "${CACHE_DIR}/gopath" "${CACHE_DIR}/golangci-lint"
 
-GO_IMAGE="golang:1.27.1"
+GO_IMAGE="golang:1.27.2"
 LINT_IMAGE="golangci/golangci-lint:v2.14.0-alpine"
 
 # Functions, not command strings: arguments and paths are never word-split, and a failing

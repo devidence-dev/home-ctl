@@ -27,7 +27,7 @@ To run formatting checks, `go vet`, `golangci-lint`, race-detector unit tests, a
 ### 2. Build Binary via Docker
 To compile the Go binary inside a clean container:
 ```bash
-docker run --rm -v "$PWD":/app -w /app golang:1.27.1 go build ./...
+docker run --rm -v "$PWD":/app -w /app golang:1.27.2 go build ./...
 ```
 
 ### 3. Build Container Image
