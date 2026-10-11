@@ -229,9 +229,9 @@ func (r *Router) handleTopicList(ctx context.Context, member *household.Member, 
 	case r.cfg.ShoppingTopicID:
 		return r.handleShoppingList(ctx, member, msg)
 	case r.cfg.ChoresTopicID:
-		return r.handleChoresListCommand(ctx, member, msg)
+		return r.handleListCommand(ctx, r.choresKind(), member, msg)
 	case r.cfg.RemindersTopicID:
-		return r.handleRemindersListCommand(ctx, member, msg)
+		return r.handleListCommand(ctx, r.remindersKind(), member, msg)
 	default:
 		r.replyUnmappedTopic(ctx, msg, locale)
 		return nil
@@ -283,10 +283,10 @@ func (r *Router) handleCallbackQuery(ctx context.Context, cq *CallbackQuery) err
 		return r.handleShoppingPurchaseCallback(ctx, member, cq, parsed)
 
 	case CallbackChoreComplete, CallbackChorePostpone, CallbackChoreDetail, CallbackListChores:
-		return r.handleChoreCallback(ctx, member, cq, parsed)
+		return r.handleListCallback(ctx, r.choresKind(), member, cq, parsed)
 
 	case CallbackReminderComplete, CallbackReminderPostpone, CallbackReminderDetail, CallbackListReminders:
-		return r.handleReminderCallback(ctx, member, cq, parsed)
+		return r.handleListCallback(ctx, r.remindersKind(), member, cq, parsed)
 
 	case CallbackFlowCancel, CallbackFlowConfirm, CallbackFlowSelect, CallbackFlowUser, CallbackFlowDue, CallbackFlowRecurrence, CallbackFlowAnchor, CallbackFlowNewItem,
 		CallbackFlowNoop, CallbackFlowRecurrenceType, CallbackFlowInterval, CallbackFlowCalendar, CallbackFlowDate, CallbackFlowHour, CallbackFlowMinute,

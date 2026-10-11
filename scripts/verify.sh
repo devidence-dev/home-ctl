@@ -38,7 +38,7 @@ run_lint() {
 
 echo "==> Step 1: gofmt check"
 UNFORMATTED="$(run_go sh -c 'find . -name "*.go" -not -path "./.git/*" -exec gofmt -l {} +')"
-if [ -n "$UNFORMATTED" ]; then
+if [[ -n "$UNFORMATTED" ]]; then
   echo "Error: Unformatted Go files found:" >&2
   echo "$UNFORMATTED" >&2
   exit 1
@@ -103,7 +103,7 @@ awk '
   END { if (bad) exit 1 }
 ' coverage.pkgs.txt || status=1
 
-if [ "$status" -ne 0 ]; then
+if [[ "$status" -ne 0 ]]; then
   echo "Per-package coverage check failed."
   exit 1
 fi

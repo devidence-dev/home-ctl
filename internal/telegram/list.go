@@ -14,32 +14,15 @@ import (
 	"github.com/px1/home-ctl/internal/reminders"
 )
 
-func (r *Router) handleChoresListCommand(ctx context.Context, member *household.Member, msg *Message) error {
-	locale := member.Locale
-	if locale == "" {
-		locale = r.cfg.DefaultLocale
-	}
+func (r *Router) handleListCommand(ctx context.Context, kind *listKind, member *household.Member, msg *Message) error {
+	locale := r.memberLocale(member)
 
 	connected, err := r.household.IsConnected(ctx, member.ID)
 	if err != nil || !connected {
 		return r.sendUnconnectedNotice(ctx, locale, msg)
 	}
 
-	return r.sendPrivateChoresList(ctx, member, member.ID)
-}
-
-func (r *Router) handleRemindersListCommand(ctx context.Context, member *household.Member, msg *Message) error {
-	locale := member.Locale
-	if locale == "" {
-		locale = r.cfg.DefaultLocale
-	}
-
-	connected, err := r.household.IsConnected(ctx, member.ID)
-	if err != nil || !connected {
-		return r.sendUnconnectedNotice(ctx, locale, msg)
-	}
-
-	return r.sendPrivateRemindersList(ctx, member, member.ID)
+	return r.sendPrivateList(ctx, kind, member, member.ID)
 }
 
 // sendUnconnectedNotice tells a member in a topic how to connect. When the bot username is known,
@@ -57,43 +40,37 @@ func (r *Router) sendUnconnectedNotice(ctx context.Context, locale string, msg *
 }
 
 func (r *Router) handlePrivateList(ctx context.Context, member *household.Member, msg *Message) error {
-	return r.sendPrivateChoresList(ctx, member, msg.Chat.ID)
+	return r.sendPrivateList(ctx, r.choresKind(), member, msg.Chat.ID)
 }
 
-func (r *Router) sendPrivateChoresList(ctx context.Context, member *household.Member, targetChatID int64) error {
-	locale := member.Locale
-	if locale == "" {
-		locale = r.cfg.DefaultLocale
-	}
-
-	res, err := r.chores.ListMyOpen(ctx, member.ID)
+// sendPrivateList sends a new private list message with the member's open occurrences of one kind.
+func (r *Router) sendPrivateList(ctx context.Context, kind *listKind, member *household.Member, targetChatID int64) error {
+	occs, remaining, err := kind.list(ctx, member.ID)
 	if err != nil {
 		return err
 	}
 
-	text, markup := r.formatChoresList(locale, res)
+	text, markup := r.formatList(kind, r.memberLocale(member), occs, remaining)
 	_, err = r.client.SendMessage(ctx, targetChatID, text, &SendOptions{
 		ReplyMarkup: markup,
 	})
 	return err
 }
 
-func (r *Router) sendPrivateRemindersList(ctx context.Context, member *household.Member, targetChatID int64) error {
-	locale := member.Locale
-	if locale == "" {
-		locale = r.cfg.DefaultLocale
+// memberLocale is the locale a member's messages are rendered in.
+func (r *Router) memberLocale(member *household.Member) string {
+	if member.Locale != "" {
+		return member.Locale
 	}
+	return r.cfg.DefaultLocale
+}
 
-	res, err := r.reminders.ListMyOpen(ctx, member.ID)
-	if err != nil {
-		return err
+// memberName is the name a member is shown by: their name, else their username.
+func memberName(member *household.Member) string {
+	if member.Name != "" {
+		return member.Name
 	}
-
-	text, markup := r.formatRemindersList(locale, res)
-	_, err = r.client.SendMessage(ctx, targetChatID, text, &SendOptions{
-		ReplyMarkup: markup,
-	})
-	return err
+	return member.Username
 }
 
 // listItem is one entry of a private list, resolved from its domain.
@@ -179,230 +156,344 @@ func (r *Router) renderListEntry(locale string, group listGroup, item listItem) 
 	return fmt.Sprintf("%s %s\n%s", item.emoji, item.name, r.i18n.T(locale, "lists.entry_detail", when))
 }
 
-// listRecurrence returns the recurrence summary, or "" for a one-time definition.
-func (r *Router) listRecurrence(locale string, interval *int, unit *string) string {
-	if interval == nil || unit == nil {
-		return ""
-	}
-	return r.recurrenceSummary(locale, *interval, *unit, nil)
+// listKind is everything the chores list and the reminders list differ in. Every list action is written
+// once against it; choresKind and remindersKind are the only places the two kinds are spelled out.
+type listKind struct {
+	prefix      string         // callback prefix of the entry buttons: "ch" or "re"
+	emoji       string         // emoji of an entry whose definition is gone
+	keys        listKeys       // i18n keys the kind renders with
+	cb          listCallbacks  // callback kinds the kind's buttons parse back into
+	topic       int64          // Telegram topic that receives completion and postponement notices
+	typedStep   string         // flow step that waits for a typed postponement time
+	short       postponePreset // the kind's own first postpone preset; the other presets are shared
+	errNotOwner error          // domain error for a member who may not act on the entry
+	errResolved error          // domain error for an occurrence that is already resolved
+
+	list     func(ctx context.Context, memberID int64) ([]listOcc, int, error)
+	get      func(ctx context.Context, occID int64) (listOcc, bool)
+	complete func(ctx context.Context, actorID, occID int64, now time.Time) (listOcc, error)
+	postpone func(ctx context.Context, actorID, occID int64, due time.Time) (listOcc, error)
 }
 
-func (r *Router) formatChoresList(locale string, res chores.ListResult) (string, *InlineKeyboardMarkup) {
-	if len(res.Occurrences) == 0 {
-		return r.i18n.T(locale, "chores.list_empty"), &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{r.listViewSwitch(locale)}}
+// listKeys are the i18n keys of one listKind.
+type listKeys struct {
+	title, empty, detail string
+	fallback             string // name of an entry whose definition is gone
+	notOwner             string // answer to a member who may not act on the entry
+	completed            string // group topic message for a completion
+	postponed            string // group topic message for a postponement
+	postponedNotice      string // callback answer after a postponement
+}
+
+// listCallbacks are the callback kinds of one listKind.
+type listCallbacks struct {
+	list, detail, complete, postpone CallbackKind
+}
+
+// postponePreset is a relative postponement choice: its button key, its callback payload and its delay.
+type postponePreset struct {
+	key, value string
+	delay      time.Duration
+}
+
+// listOcc is one occurrence of either kind, reduced to what the lists and their actions show.
+type listOcc struct {
+	id          int64
+	status      string
+	dueAt       time.Time
+	defined     bool // false when the definition is gone, so the kind's fallback emoji and name apply
+	emoji, name string
+	interval    *int
+	unit        *string
+}
+
+// choreOcc reduces a chore occurrence to a listOcc. A nil occurrence yields the zero value.
+func choreOcc(occ *chores.Occurrence) listOcc {
+	if occ == nil {
+		return listOcc{}
+	}
+	v := listOcc{id: occ.ID, status: occ.Status, dueAt: occ.DueAt}
+	if d := occ.Definition; d != nil {
+		v.defined, v.emoji, v.name, v.interval, v.unit = true, d.Emoji, d.Name, d.RecurrenceInterval, d.RecurrenceUnit
+	}
+	return v
+}
+
+// reminderOcc reduces a reminder occurrence to a listOcc. A nil occurrence yields the zero value.
+func reminderOcc(occ *reminders.Occurrence) listOcc {
+	if occ == nil {
+		return listOcc{}
+	}
+	v := listOcc{id: occ.ID, status: occ.Status, dueAt: occ.DueAt}
+	if d := occ.Definition; d != nil {
+		v.defined, v.emoji, v.name, v.interval, v.unit = true, d.Emoji, d.Title, d.RecurrenceInterval, d.RecurrenceUnit
+	}
+	return v
+}
+
+// choresKind binds the chores list to this router's chores service and topic.
+func (r *Router) choresKind() *listKind {
+	return &listKind{
+		prefix: "ch",
+		emoji:  "🧹",
+		keys: listKeys{
+			title: "chores.list_title", empty: "chores.list_empty", detail: "chores.detail_view",
+			fallback: i18nKeyChoresFallbackName, notOwner: i18nKeyChoresNotAssignee,
+			completed: "group.chore_completed", postponed: "group.chore_postponed", postponedNotice: "chores.postponed_notice",
+		},
+		cb: listCallbacks{
+			list: CallbackListChores, detail: CallbackChoreDetail, complete: CallbackChoreComplete, postpone: CallbackChorePostpone,
+		},
+		topic:       r.cfg.ChoresTopicID,
+		typedStep:   "chore_postpone_typed",
+		short:       postponePreset{key: "buttons.postpone_30m", value: "30m", delay: 30 * time.Minute},
+		errNotOwner: chores.ErrNotAssignee,
+		errResolved: chores.ErrOccurrenceResolved,
+		list: func(ctx context.Context, memberID int64) ([]listOcc, int, error) {
+			res, err := r.chores.ListMyOpen(ctx, memberID)
+			occs := make([]listOcc, 0, len(res.Occurrences))
+			for i := range res.Occurrences {
+				occs = append(occs, choreOcc(&res.Occurrences[i]))
+			}
+			return occs, res.RemainingCount, err
+		},
+		get: func(ctx context.Context, occID int64) (listOcc, bool) {
+			occ, err := r.chores.GetOccurrence(ctx, occID)
+			if err != nil || occ == nil || occ.Status != "open" {
+				return listOcc{}, false
+			}
+			return choreOcc(occ), true
+		},
+		complete: func(ctx context.Context, actorID, occID int64, now time.Time) (listOcc, error) {
+			occ, _, err := r.chores.Complete(ctx, actorID, occID, now)
+			return choreOcc(occ), err
+		},
+		postpone: func(ctx context.Context, actorID, occID int64, due time.Time) (listOcc, error) {
+			occ, err := r.chores.Postpone(ctx, actorID, occID, due)
+			return choreOcc(occ), err
+		},
+	}
+}
+
+// remindersKind binds the reminders list to this router's reminders service and topic.
+func (r *Router) remindersKind() *listKind {
+	return &listKind{
+		prefix: "re",
+		emoji:  "⏰",
+		keys: listKeys{
+			title: "reminders.list_title", empty: "reminders.list_empty", detail: "reminders.detail_view",
+			fallback: i18nKeyRemindersFallbackTitle, notOwner: i18nKeyRemindersNotTarget,
+			completed: "group.reminder_completed", postponed: "group.reminder_postponed", postponedNotice: "reminders.postponed_notice",
+		},
+		cb: listCallbacks{
+			list: CallbackListReminders, detail: CallbackReminderDetail, complete: CallbackReminderComplete, postpone: CallbackReminderPostpone,
+		},
+		topic:       r.cfg.RemindersTopicID,
+		typedStep:   "reminder_postpone_typed",
+		short:       postponePreset{key: "buttons.postpone_15m", value: "15m", delay: 15 * time.Minute},
+		errNotOwner: reminders.ErrNotTarget,
+		errResolved: reminders.ErrOccurrenceResolved,
+		list: func(ctx context.Context, memberID int64) ([]listOcc, int, error) {
+			res, err := r.reminders.ListMyOpen(ctx, memberID)
+			occs := make([]listOcc, 0, len(res.Occurrences))
+			for i := range res.Occurrences {
+				occs = append(occs, reminderOcc(&res.Occurrences[i]))
+			}
+			return occs, res.RemainingCount, err
+		},
+		get: func(ctx context.Context, occID int64) (listOcc, bool) {
+			occ, err := r.reminders.GetOccurrence(ctx, occID)
+			if err != nil || occ == nil || occ.Status != "open" {
+				return listOcc{}, false
+			}
+			return reminderOcc(occ), true
+		},
+		complete: func(ctx context.Context, actorID, occID int64, now time.Time) (listOcc, error) {
+			occ, _, err := r.reminders.Complete(ctx, actorID, occID, now)
+			return reminderOcc(occ), err
+		},
+		postpone: func(ctx context.Context, actorID, occID int64, due time.Time) (listOcc, error) {
+			occ, err := r.reminders.Postpone(ctx, actorID, occID, due)
+			return reminderOcc(occ), err
+		},
+	}
+}
+
+// entryLabel returns the emoji and name of an occurrence, with the kind's fallbacks when its definition is gone.
+func (r *Router) entryLabel(kind *listKind, locale string, occ listOcc) (string, string) {
+	if !occ.defined {
+		return kind.emoji, r.i18n.T(locale, kind.keys.fallback)
+	}
+	return occ.emoji, occ.name
+}
+
+// entryRecurrence returns the recurrence summary of an occurrence; ok is false for a one-time definition.
+func (r *Router) entryRecurrence(locale string, occ listOcc) (summary string, ok bool) {
+	if occ.interval == nil || occ.unit == nil {
+		return "", false
+	}
+	return r.recurrenceSummary(locale, *occ.interval, *occ.unit, nil), true
+}
+
+// formatList renders the body and keyboard of a private list of one kind.
+func (r *Router) formatList(kind *listKind, locale string, occs []listOcc, remaining int) (string, *InlineKeyboardMarkup) {
+	if len(occs) == 0 {
+		return r.i18n.T(locale, kind.keys.empty), &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{r.listViewSwitch(locale)}}
 	}
 
-	items := make([]listItem, 0, len(res.Occurrences))
-	for _, occ := range res.Occurrences {
+	items := make([]listItem, 0, len(occs))
+	for _, occ := range occs {
+		emoji, name := r.entryLabel(kind, locale, occ)
 		item := listItem{
-			emoji:    "🧹",
-			name:     r.i18n.T(locale, i18nKeyChoresFallbackName),
-			callback: fmt.Sprintf("ch:d:%d", occ.ID),
-			dueAt:    occ.DueAt,
+			emoji:    emoji,
+			name:     name,
+			callback: fmt.Sprintf("%s:d:%d", kind.prefix, occ.id),
+			dueAt:    occ.dueAt,
 		}
-		if occ.Definition != nil {
-			item.name = occ.Definition.Name
-			item.emoji = occ.Definition.Emoji
-			item.recurrence = r.listRecurrence(locale, occ.Definition.RecurrenceInterval, occ.Definition.RecurrenceUnit)
-		}
+		item.recurrence, _ = r.entryRecurrence(locale, occ)
 		items = append(items, item)
 	}
-	return r.renderPrivateList(locale, r.i18n.T(locale, "chores.list_title"), res.RemainingCount, items)
+	return r.renderPrivateList(locale, r.i18n.T(locale, kind.keys.title), remaining, items)
 }
 
-func (r *Router) formatRemindersList(locale string, res reminders.ListResult) (string, *InlineKeyboardMarkup) {
-	if len(res.Occurrences) == 0 {
-		return r.i18n.T(locale, "reminders.list_empty"), &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{r.listViewSwitch(locale)}}
-	}
-
-	items := make([]listItem, 0, len(res.Occurrences))
-	for _, occ := range res.Occurrences {
-		item := listItem{
-			emoji:    "⏰",
-			name:     r.i18n.T(locale, i18nKeyRemindersFallbackTitle),
-			callback: fmt.Sprintf("re:d:%d", occ.ID),
-			dueAt:    occ.DueAt,
-		}
-		if occ.Definition != nil {
-			item.name = occ.Definition.Title
-			item.emoji = occ.Definition.Emoji
-			item.recurrence = r.listRecurrence(locale, occ.Definition.RecurrenceInterval, occ.Definition.RecurrenceUnit)
-		}
-		items = append(items, item)
-	}
-	return r.renderPrivateList(locale, r.i18n.T(locale, "reminders.list_title"), res.RemainingCount, items)
-}
-
-func (r *Router) handleChoreCallback(ctx context.Context, member *household.Member, cq *CallbackQuery, parsed *ParsedCallback) error {
-	locale := member.Locale
-	if locale == "" {
-		locale = r.cfg.DefaultLocale
-	}
+// handleListCallback routes the callbacks of one list kind: its list, detail, completion and postponement.
+func (r *Router) handleListCallback(ctx context.Context, kind *listKind, member *household.Member, cq *CallbackQuery, parsed *ParsedCallback) error {
+	locale := r.memberLocale(member)
 
 	switch parsed.Kind {
-	case CallbackListChores:
-		return r.showChoresList(ctx, member, cq, locale)
-	case CallbackChoreDetail:
-		return r.showChoreDetail(ctx, member, cq, parsed.TargetID, locale)
-	case CallbackChoreComplete:
-		return r.completeChore(ctx, member, cq, parsed, locale)
-	case CallbackChorePostpone:
-		return r.postponeChore(ctx, member, cq, parsed, locale)
+	case kind.cb.list:
+		return r.showList(ctx, kind, member, cq, locale)
+	case kind.cb.detail:
+		return r.showListDetail(ctx, kind, member, cq, parsed.TargetID, locale)
+	case kind.cb.complete:
+		return r.completeListItem(ctx, kind, member, cq, parsed, locale)
+	case kind.cb.postpone:
+		return r.postponeListItem(ctx, kind, member, cq, parsed, locale)
 	}
 
 	return nil
 }
 
-// showChoresList edits the message back to the member's open chores.
-func (r *Router) showChoresList(ctx context.Context, member *household.Member, cq *CallbackQuery, locale string) error {
-	res, err := r.chores.ListMyOpen(ctx, member.ID)
-	if err != nil {
-		return err
-	}
-	text, markup := r.formatChoresList(locale, res)
+// answerAndEdit acknowledges a callback and edits its message to text and markup.
+func (r *Router) answerAndEdit(ctx context.Context, cq *CallbackQuery, text string, markup *InlineKeyboardMarkup) error {
 	_ = r.client.AnswerCallbackQuery(ctx, cq.ID, "", false)
 	return r.client.EditMessageText(ctx, cq.Message.Chat.ID, cq.Message.MessageID, text, &EditOptions{
 		ReplyMarkup: markup,
 	})
 }
 
-// showChoreDetail edits the message to one open chore; a stale chore re-renders the list instead.
-func (r *Router) showChoreDetail(ctx context.Context, member *household.Member, cq *CallbackQuery, occID int64, locale string) error {
-	occ, err := r.chores.GetOccurrence(ctx, occID)
-	if err != nil || occ == nil || occ.Status != "open" {
+// showList edits the message back to the member's open occurrences of one kind.
+func (r *Router) showList(ctx context.Context, kind *listKind, member *household.Member, cq *CallbackQuery, locale string) error {
+	occs, remaining, err := kind.list(ctx, member.ID)
+	if err != nil {
+		return err
+	}
+	text, markup := r.formatList(kind, locale, occs, remaining)
+	return r.answerAndEdit(ctx, cq, text, markup)
+}
+
+// showListDetail edits the message to one open occurrence; a stale occurrence re-renders the list instead.
+func (r *Router) showListDetail(ctx context.Context, kind *listKind, member *household.Member, cq *CallbackQuery, occID int64, locale string) error {
+	occ, ok := kind.get(ctx, occID)
+	if !ok {
 		// Stale detail: re-render current list
-		res, _ := r.chores.ListMyOpen(ctx, member.ID)
-		text, markup := r.formatChoresList(locale, res)
-		_ = r.client.AnswerCallbackQuery(ctx, cq.ID, "", false)
-		return r.client.EditMessageText(ctx, cq.Message.Chat.ID, cq.Message.MessageID, text, &EditOptions{
-			ReplyMarkup: markup,
-		})
+		occs, remaining, _ := kind.list(ctx, member.ID)
+		text, markup := r.formatList(kind, locale, occs, remaining)
+		return r.answerAndEdit(ctx, cq, text, markup)
 	}
 
-	name := r.i18n.T(locale, i18nKeyChoresFallbackName)
-	emoji := "🧹"
-	recSummary := r.i18n.T(locale, "general.recurrence_one_off")
-	if occ.Definition != nil {
-		name = occ.Definition.Name
-		emoji = occ.Definition.Emoji
-		if occ.Definition.RecurrenceInterval != nil && occ.Definition.RecurrenceUnit != nil {
-			recSummary = r.recurrenceSummary(locale, *occ.Definition.RecurrenceInterval, *occ.Definition.RecurrenceUnit, nil)
-		}
+	emoji, name := r.entryLabel(kind, locale, occ)
+	recSummary, ok := r.entryRecurrence(locale, occ)
+	if !ok {
+		recSummary = r.i18n.T(locale, "general.recurrence_one_off")
 	}
 
-	dueStr := r.formatDateTime(locale, occ.DueAt)
-	assigneeName := member.Name
-	if assigneeName == "" {
-		assigneeName = member.Username
-	}
-
-	detailText := r.i18n.T(locale, "chores.detail_view", emoji, name, dueStr, assigneeName, recSummary)
+	dueStr := r.formatDateTime(locale, occ.dueAt)
+	detailText := r.i18n.T(locale, kind.keys.detail, emoji, name, dueStr, memberName(member), recSummary)
 	markup := &InlineKeyboardMarkup{
 		InlineKeyboard: [][]InlineKeyboardButton{
 			{
-				{Text: r.i18n.T(locale, "buttons.done"), CallbackData: fmt.Sprintf("ch:c:%d", occ.ID)},
-				{Text: r.i18n.T(locale, "buttons.postpone"), CallbackData: fmt.Sprintf("ch:p:%d", occ.ID)},
+				{Text: r.i18n.T(locale, "buttons.done"), CallbackData: fmt.Sprintf("%s:c:%d", kind.prefix, occ.id)},
+				{Text: r.i18n.T(locale, "buttons.postpone"), CallbackData: fmt.Sprintf("%s:p:%d", kind.prefix, occ.id)},
 			},
 			{
-				{Text: r.i18n.T(locale, i18nKeyButtonBack), CallbackData: "list:ch"},
+				{Text: r.i18n.T(locale, i18nKeyButtonBack), CallbackData: "list:" + kind.prefix},
 			},
 		},
 	}
 
-	_ = r.client.AnswerCallbackQuery(ctx, cq.ID, "", false)
-	return r.client.EditMessageText(ctx, cq.Message.Chat.ID, cq.Message.MessageID, detailText, &EditOptions{
-		ReplyMarkup: markup,
-	})
+	return r.answerAndEdit(ctx, cq, detailText, markup)
 }
 
-func (r *Router) completeChore(ctx context.Context, member *household.Member, cq *CallbackQuery, parsed *ParsedCallback, locale string) error {
-	now := r.clock.Now().UTC()
-	occ, _, err := r.chores.Complete(ctx, parsed.ActorID, parsed.TargetID, now)
+func (r *Router) completeListItem(ctx context.Context, kind *listKind, member *household.Member, cq *CallbackQuery, parsed *ParsedCallback, locale string) error {
+	occ, err := kind.complete(ctx, parsed.ActorID, parsed.TargetID, r.clock.Now().UTC())
 	if err != nil {
-		if errors.Is(err, chores.ErrNotAssignee) {
-			_ = r.client.AnswerCallbackQuery(ctx, cq.ID, r.i18n.T(locale, i18nKeyChoresNotAssignee), true)
-			return nil
-		}
-		_ = r.client.AnswerCallbackQuery(ctx, cq.ID, r.userErrorText(locale, err), true)
+		_ = r.client.AnswerCallbackQuery(ctx, cq.ID, r.listErrorText(kind, locale, err), true)
 		return nil
 	}
 
 	_ = r.client.AnswerCallbackQuery(ctx, cq.ID, r.i18n.T(locale, "general.done"), false)
 
 	// Post group topic update
-	name := r.i18n.T(r.cfg.DefaultLocale, i18nKeyChoresFallbackName)
-	emoji := "🧹"
-	if occ != nil && occ.Definition != nil {
-		name = occ.Definition.Name
-		emoji = occ.Definition.Emoji
-	}
-	actorName := member.Name
-	if actorName == "" {
-		actorName = member.Username
-	}
-	groupMsg := r.i18n.T(r.cfg.DefaultLocale, "group.chore_completed", emoji, name, actorName)
+	emoji, name := r.entryLabel(kind, r.cfg.DefaultLocale, occ)
+	groupMsg := r.i18n.T(r.cfg.DefaultLocale, kind.keys.completed, emoji, name, memberName(member))
 	_, _ = r.client.SendMessage(ctx, r.cfg.ChatID, groupMsg, &SendOptions{
-		ThreadID: r.cfg.ChoresTopicID,
+		ThreadID: kind.topic,
 	})
 
 	// If this is in a private chat message, re-render the list view
-	return r.refreshChoresList(ctx, member, cq, locale)
+	return r.refreshList(ctx, kind, member, cq, locale)
 }
 
-func (r *Router) postponeChore(ctx context.Context, member *household.Member, cq *CallbackQuery, parsed *ParsedCallback, locale string) error {
+func (r *Router) postponeListItem(ctx context.Context, kind *listKind, member *household.Member, cq *CallbackQuery, parsed *ParsedCallback, locale string) error {
 	if parsed.Payload == "" {
-		return r.showChorePostponePresets(ctx, cq, parsed.TargetID, locale)
+		return r.showPostponePresets(ctx, kind, cq, parsed.TargetID, locale)
 	}
 
 	// Preset picked
 	if parsed.Payload == "custom" {
-		return r.startTypedPostpone(ctx, member, cq, "chore_postpone_typed", parsed.TargetID, locale)
+		return r.startTypedPostpone(ctx, member, cq, kind.typedStep, parsed.TargetID, locale)
 	}
 
-	newDue := r.chorePostponeTime(parsed.Payload)
-	occ, err := r.chores.Postpone(ctx, parsed.ActorID, parsed.TargetID, newDue)
+	newDue := r.postponeTime(kind, parsed.Payload)
+	occ, err := kind.postpone(ctx, parsed.ActorID, parsed.TargetID, newDue)
 	if err != nil {
-		return r.answerChorePostponeError(ctx, member, cq, locale, err)
+		return r.answerPostponeError(ctx, kind, member, cq, locale, err)
 	}
 
-	_ = r.client.AnswerCallbackQuery(ctx, cq.ID, r.i18n.T(locale, "chores.postponed_notice"), false)
+	_ = r.client.AnswerCallbackQuery(ctx, cq.ID, r.i18n.T(locale, kind.keys.postponedNotice), false)
 
-	r.postChorePostponed(ctx, member, occ, newDue)
+	r.postPostponed(ctx, kind, member, occ, newDue)
 
 	// Return to list view
-	return r.refreshChoresList(ctx, member, cq, locale)
+	return r.refreshList(ctx, kind, member, cq, locale)
 }
 
-// showChorePostponePresets edits the message to the postponement presets for one chore.
-func (r *Router) showChorePostponePresets(ctx context.Context, cq *CallbackQuery, occID int64, locale string) error {
+// showPostponePresets edits the message to the postponement presets for one occurrence.
+func (r *Router) showPostponePresets(ctx context.Context, kind *listKind, cq *CallbackQuery, occID int64, locale string) error {
 	rows := [][]InlineKeyboardButton{
 		{
-			{Text: r.i18n.T(locale, "buttons.postpone_30m"), CallbackData: fmt.Sprintf("ch:p:%d:30m", occID)},
-			{Text: r.i18n.T(locale, "buttons.postpone_1h"), CallbackData: fmt.Sprintf("ch:p:%d:1h", occID)},
-			{Text: r.i18n.T(locale, "buttons.postpone_3h"), CallbackData: fmt.Sprintf("ch:p:%d:3h", occID)},
+			{Text: r.i18n.T(locale, kind.short.key), CallbackData: fmt.Sprintf("%s:p:%d:%s", kind.prefix, occID, kind.short.value)},
+			{Text: r.i18n.T(locale, "buttons.postpone_1h"), CallbackData: fmt.Sprintf("%s:p:%d:1h", kind.prefix, occID)},
+			{Text: r.i18n.T(locale, "buttons.postpone_3h"), CallbackData: fmt.Sprintf("%s:p:%d:3h", kind.prefix, occID)},
 		},
 		{
-			{Text: r.i18n.T(locale, "buttons.postpone_tomorrow"), CallbackData: fmt.Sprintf("ch:p:%d:tom", occID)},
-			{Text: r.i18n.T(locale, i18nKeyButtonBack), CallbackData: fmt.Sprintf("ch:d:%d", occID)},
+			{Text: r.i18n.T(locale, "buttons.postpone_tomorrow"), CallbackData: fmt.Sprintf("%s:p:%d:tom", kind.prefix, occID)},
+			{Text: r.i18n.T(locale, i18nKeyButtonBack), CallbackData: fmt.Sprintf("%s:d:%d", kind.prefix, occID)},
 		},
 		{
-			{Text: r.i18n.T(locale, "buttons.postpone_custom"), CallbackData: fmt.Sprintf("ch:p:%d:custom", occID)},
+			{Text: r.i18n.T(locale, "buttons.postpone_custom"), CallbackData: fmt.Sprintf("%s:p:%d:custom", kind.prefix, occID)},
 		},
 	}
-	_ = r.client.AnswerCallbackQuery(ctx, cq.ID, "", false)
-	return r.client.EditMessageText(ctx, cq.Message.Chat.ID, cq.Message.MessageID, r.i18n.T(locale, "general.postpone_prompt"), &EditOptions{
-		ReplyMarkup: &InlineKeyboardMarkup{InlineKeyboard: rows},
-	})
+	return r.answerAndEdit(ctx, cq, r.i18n.T(locale, "general.postpone_prompt"), &InlineKeyboardMarkup{InlineKeyboard: rows})
 }
 
-// chorePostponeTime returns the due time for a chore postponement preset.
-func (r *Router) chorePostponeTime(preset string) time.Time {
+// postponeTime returns the due time for a postponement preset of one kind.
+func (r *Router) postponeTime(kind *listKind, preset string) time.Time {
 	now := r.clock.Now().In(r.clock.Location())
 	switch preset {
-	case "30m":
-		return now.Add(30 * time.Minute)
-	case "1h":
-		return now.Add(1 * time.Hour)
+	case kind.short.value:
+		return now.Add(kind.short.delay)
 	case "3h":
 		return now.Add(3 * time.Hour)
 	case "tom":
@@ -412,263 +503,41 @@ func (r *Router) chorePostponeTime(preset string) time.Time {
 	}
 }
 
-// answerChorePostponeError tells the member why a chore could not be postponed.
-func (r *Router) answerChorePostponeError(ctx context.Context, member *household.Member, cq *CallbackQuery, locale string, err error) error {
-	if errors.Is(err, chores.ErrNotAssignee) {
-		_ = r.client.AnswerCallbackQuery(ctx, cq.ID, r.i18n.T(locale, i18nKeyChoresNotAssignee), true)
-		return nil
+// listErrorText is the answer to a failed list action: the ownership wording, or the user error text.
+func (r *Router) listErrorText(kind *listKind, locale string, err error) string {
+	if errors.Is(err, kind.errNotOwner) {
+		return r.i18n.T(locale, kind.keys.notOwner)
 	}
-	if errors.Is(err, chores.ErrOccurrenceResolved) {
+	return r.userErrorText(locale, err)
+}
+
+// answerPostponeError tells the member why an occurrence could not be postponed.
+func (r *Router) answerPostponeError(ctx context.Context, kind *listKind, member *household.Member, cq *CallbackQuery, locale string, err error) error {
+	_ = r.client.AnswerCallbackQuery(ctx, cq.ID, r.listErrorText(kind, locale, err), true)
+	if errors.Is(err, kind.errResolved) {
 		// Stale button: tell the user and show the current list instead of the dead detail.
-		_ = r.client.AnswerCallbackQuery(ctx, cq.ID, r.userErrorText(locale, err), true)
-		return r.refreshChoresList(ctx, member, cq, locale)
+		return r.refreshList(ctx, kind, member, cq, locale)
 	}
-	_ = r.client.AnswerCallbackQuery(ctx, cq.ID, r.userErrorText(locale, err), true)
 	return nil
 }
 
-func (r *Router) handleReminderCallback(ctx context.Context, member *household.Member, cq *CallbackQuery, parsed *ParsedCallback) error {
-	locale := member.Locale
-	if locale == "" {
-		locale = r.cfg.DefaultLocale
-	}
-
-	switch parsed.Kind {
-	case CallbackListReminders:
-		return r.showRemindersList(ctx, member, cq, locale)
-	case CallbackReminderDetail:
-		return r.showReminderDetail(ctx, member, cq, parsed.TargetID, locale)
-	case CallbackReminderComplete:
-		return r.completeReminder(ctx, member, cq, parsed, locale)
-	case CallbackReminderPostpone:
-		return r.postponeReminder(ctx, member, cq, parsed, locale)
-	}
-
-	return nil
-}
-
-// showRemindersList edits the message back to the member's open reminders.
-func (r *Router) showRemindersList(ctx context.Context, member *household.Member, cq *CallbackQuery, locale string) error {
-	res, err := r.reminders.ListMyOpen(ctx, member.ID)
-	if err != nil {
-		return err
-	}
-	text, markup := r.formatRemindersList(locale, res)
-	_ = r.client.AnswerCallbackQuery(ctx, cq.ID, "", false)
-	return r.client.EditMessageText(ctx, cq.Message.Chat.ID, cq.Message.MessageID, text, &EditOptions{
-		ReplyMarkup: markup,
-	})
-}
-
-// showReminderDetail edits the message to one open reminder; a stale reminder re-renders the list instead.
-func (r *Router) showReminderDetail(ctx context.Context, member *household.Member, cq *CallbackQuery, occID int64, locale string) error {
-	occ, err := r.reminders.GetOccurrence(ctx, occID)
-	if err != nil || occ == nil || occ.Status != "open" {
-		res, _ := r.reminders.ListMyOpen(ctx, member.ID)
-		text, markup := r.formatRemindersList(locale, res)
-		_ = r.client.AnswerCallbackQuery(ctx, cq.ID, "", false)
-		return r.client.EditMessageText(ctx, cq.Message.Chat.ID, cq.Message.MessageID, text, &EditOptions{
-			ReplyMarkup: markup,
-		})
-	}
-
-	title := r.i18n.T(locale, i18nKeyRemindersFallbackTitle)
-	emoji := "⏰"
-	recSummary := r.i18n.T(locale, "general.recurrence_one_off")
-	if occ.Definition != nil {
-		title = occ.Definition.Title
-		emoji = occ.Definition.Emoji
-		if occ.Definition.RecurrenceInterval != nil && occ.Definition.RecurrenceUnit != nil {
-			recSummary = r.recurrenceSummary(locale, *occ.Definition.RecurrenceInterval, *occ.Definition.RecurrenceUnit, nil)
-		}
-	}
-
-	dueStr := r.formatDateTime(locale, occ.DueAt)
-	targetName := member.Name
-	if targetName == "" {
-		targetName = member.Username
-	}
-
-	detailText := r.i18n.T(locale, "reminders.detail_view", emoji, title, dueStr, targetName, recSummary)
-	markup := &InlineKeyboardMarkup{
-		InlineKeyboard: [][]InlineKeyboardButton{
-			{
-				{Text: r.i18n.T(locale, "buttons.done"), CallbackData: fmt.Sprintf("re:c:%d", occ.ID)},
-				{Text: r.i18n.T(locale, "buttons.postpone"), CallbackData: fmt.Sprintf("re:p:%d", occ.ID)},
-			},
-			{
-				{Text: r.i18n.T(locale, i18nKeyButtonBack), CallbackData: "list:re"},
-			},
-		},
-	}
-
-	_ = r.client.AnswerCallbackQuery(ctx, cq.ID, "", false)
-	return r.client.EditMessageText(ctx, cq.Message.Chat.ID, cq.Message.MessageID, detailText, &EditOptions{
-		ReplyMarkup: markup,
-	})
-}
-
-func (r *Router) completeReminder(ctx context.Context, member *household.Member, cq *CallbackQuery, parsed *ParsedCallback, locale string) error {
-	now := r.clock.Now().UTC()
-	occ, _, err := r.reminders.Complete(ctx, parsed.ActorID, parsed.TargetID, now)
-	if err != nil {
-		if errors.Is(err, reminders.ErrNotTarget) {
-			_ = r.client.AnswerCallbackQuery(ctx, cq.ID, r.i18n.T(locale, i18nKeyRemindersNotTarget), true)
-			return nil
-		}
-		_ = r.client.AnswerCallbackQuery(ctx, cq.ID, r.userErrorText(locale, err), true)
-		return nil
-	}
-
-	_ = r.client.AnswerCallbackQuery(ctx, cq.ID, r.i18n.T(locale, "general.done"), false)
-
-	title := r.i18n.T(r.cfg.DefaultLocale, i18nKeyRemindersFallbackTitle)
-	emoji := "⏰"
-	if occ != nil && occ.Definition != nil {
-		title = occ.Definition.Title
-		emoji = occ.Definition.Emoji
-	}
-	actorName := member.Name
-	if actorName == "" {
-		actorName = member.Username
-	}
-	groupMsg := r.i18n.T(r.cfg.DefaultLocale, "group.reminder_completed", emoji, title, actorName)
-	_, _ = r.client.SendMessage(ctx, r.cfg.ChatID, groupMsg, &SendOptions{
-		ThreadID: r.cfg.RemindersTopicID,
-	})
-
-	return r.refreshRemindersList(ctx, member, cq, locale)
-}
-
-func (r *Router) postponeReminder(ctx context.Context, member *household.Member, cq *CallbackQuery, parsed *ParsedCallback, locale string) error {
-	if parsed.Payload == "" {
-		return r.showReminderPostponePresets(ctx, cq, parsed.TargetID, locale)
-	}
-
-	if parsed.Payload == "custom" {
-		return r.startTypedPostpone(ctx, member, cq, "reminder_postpone_typed", parsed.TargetID, locale)
-	}
-
-	newDue := r.reminderPostponeTime(parsed.Payload)
-	occ, err := r.reminders.Postpone(ctx, parsed.ActorID, parsed.TargetID, newDue)
-	if err != nil {
-		return r.answerReminderPostponeError(ctx, member, cq, locale, err)
-	}
-
-	_ = r.client.AnswerCallbackQuery(ctx, cq.ID, r.i18n.T(locale, "reminders.postponed_notice"), false)
-
-	r.postReminderPostponed(ctx, member, occ, newDue)
-
-	return r.refreshRemindersList(ctx, member, cq, locale)
-}
-
-// showReminderPostponePresets edits the message to the postponement presets for one reminder.
-func (r *Router) showReminderPostponePresets(ctx context.Context, cq *CallbackQuery, occID int64, locale string) error {
-	rows := [][]InlineKeyboardButton{
-		{
-			{Text: r.i18n.T(locale, "buttons.postpone_15m"), CallbackData: fmt.Sprintf("re:p:%d:15m", occID)},
-			{Text: r.i18n.T(locale, "buttons.postpone_1h"), CallbackData: fmt.Sprintf("re:p:%d:1h", occID)},
-			{Text: r.i18n.T(locale, "buttons.postpone_3h"), CallbackData: fmt.Sprintf("re:p:%d:3h", occID)},
-		},
-		{
-			{Text: r.i18n.T(locale, "buttons.postpone_tomorrow"), CallbackData: fmt.Sprintf("re:p:%d:tom", occID)},
-			{Text: r.i18n.T(locale, i18nKeyButtonBack), CallbackData: fmt.Sprintf("re:d:%d", occID)},
-		},
-		{
-			{Text: r.i18n.T(locale, "buttons.postpone_custom"), CallbackData: fmt.Sprintf("re:p:%d:custom", occID)},
-		},
-	}
-	_ = r.client.AnswerCallbackQuery(ctx, cq.ID, "", false)
-	return r.client.EditMessageText(ctx, cq.Message.Chat.ID, cq.Message.MessageID, r.i18n.T(locale, "general.postpone_prompt"), &EditOptions{
-		ReplyMarkup: &InlineKeyboardMarkup{InlineKeyboard: rows},
-	})
-}
-
-// reminderPostponeTime returns the due time for a reminder postponement preset.
-func (r *Router) reminderPostponeTime(preset string) time.Time {
-	now := r.clock.Now().In(r.clock.Location())
-	switch preset {
-	case "15m":
-		return now.Add(15 * time.Minute)
-	case "1h":
-		return now.Add(1 * time.Hour)
-	case "3h":
-		return now.Add(3 * time.Hour)
-	case "tom":
-		return r.dayAt(1, r.defaultTime)
-	default:
-		return now.Add(1 * time.Hour)
-	}
-}
-
-// answerReminderPostponeError tells the member why a reminder could not be postponed.
-func (r *Router) answerReminderPostponeError(ctx context.Context, member *household.Member, cq *CallbackQuery, locale string, err error) error {
-	if errors.Is(err, reminders.ErrNotTarget) {
-		_ = r.client.AnswerCallbackQuery(ctx, cq.ID, r.i18n.T(locale, i18nKeyRemindersNotTarget), true)
-		return nil
-	}
-	if errors.Is(err, reminders.ErrOccurrenceResolved) {
-		// Stale button: tell the user and show the current list instead of the dead detail.
-		_ = r.client.AnswerCallbackQuery(ctx, cq.ID, r.userErrorText(locale, err), true)
-		return r.refreshRemindersList(ctx, member, cq, locale)
-	}
-	_ = r.client.AnswerCallbackQuery(ctx, cq.ID, r.userErrorText(locale, err), true)
-	return nil
-}
-
-// refreshChoresList edits a private list message back to the member's current chore list.
-func (r *Router) refreshChoresList(ctx context.Context, member *household.Member, cq *CallbackQuery, locale string) error {
+// refreshList edits a private list message back to the member's current list of one kind.
+func (r *Router) refreshList(ctx context.Context, kind *listKind, member *household.Member, cq *CallbackQuery, locale string) error {
 	if cq.Message == nil || cq.Message.Chat.Type != "private" {
 		return nil
 	}
-	res, _ := r.chores.ListMyOpen(ctx, member.ID)
-	text, markup := r.formatChoresList(locale, res)
+	occs, remaining, _ := kind.list(ctx, member.ID)
+	text, markup := r.formatList(kind, locale, occs, remaining)
 	return r.client.EditMessageText(ctx, cq.Message.Chat.ID, cq.Message.MessageID, text, &EditOptions{ReplyMarkup: markup})
 }
 
-// refreshRemindersList edits a private list message back to the member's current reminder list.
-func (r *Router) refreshRemindersList(ctx context.Context, member *household.Member, cq *CallbackQuery, locale string) error {
-	if cq.Message == nil || cq.Message.Chat.Type != "private" {
-		return nil
-	}
-	res, _ := r.reminders.ListMyOpen(ctx, member.ID)
-	text, markup := r.formatRemindersList(locale, res)
-	return r.client.EditMessageText(ctx, cq.Message.Chat.ID, cq.Message.MessageID, text, &EditOptions{ReplyMarkup: markup})
-}
-
-// postChorePostponed announces a postponement in the Chores topic, in the default locale.
+// postPostponed announces a postponement in the kind's topic, in the default locale.
 // It runs after the change is committed; a failed post never rolls anything back.
-func (r *Router) postChorePostponed(ctx context.Context, member *household.Member, occ *chores.Occurrence, newDue time.Time) {
-	name := r.i18n.T(r.cfg.DefaultLocale, i18nKeyChoresFallbackName)
-	emoji := "🧹"
-	if occ != nil && occ.Definition != nil {
-		name = occ.Definition.Name
-		emoji = occ.Definition.Emoji
-	}
-	actorName := member.Name
-	if actorName == "" {
-		actorName = member.Username
-	}
+func (r *Router) postPostponed(ctx context.Context, kind *listKind, member *household.Member, occ listOcc, newDue time.Time) {
+	emoji, name := r.entryLabel(kind, r.cfg.DefaultLocale, occ)
 	dueStr := r.formatDateTime(r.cfg.DefaultLocale, newDue)
-	groupMsg := r.i18n.T(r.cfg.DefaultLocale, "group.chore_postponed", emoji, name, actorName, dueStr)
-	_, _ = r.client.SendMessage(ctx, r.cfg.ChatID, groupMsg, &SendOptions{ThreadID: r.cfg.ChoresTopicID})
-}
-
-// postReminderPostponed announces a postponement in the Reminders topic, in the default locale.
-func (r *Router) postReminderPostponed(ctx context.Context, member *household.Member, occ *reminders.Occurrence, newDue time.Time) {
-	title := r.i18n.T(r.cfg.DefaultLocale, i18nKeyRemindersFallbackTitle)
-	emoji := "⏰"
-	if occ != nil && occ.Definition != nil {
-		title = occ.Definition.Title
-		emoji = occ.Definition.Emoji
-	}
-	actorName := member.Name
-	if actorName == "" {
-		actorName = member.Username
-	}
-	dueStr := r.formatDateTime(r.cfg.DefaultLocale, newDue)
-	groupMsg := r.i18n.T(r.cfg.DefaultLocale, "group.reminder_postponed", emoji, title, actorName, dueStr)
-	_, _ = r.client.SendMessage(ctx, r.cfg.ChatID, groupMsg, &SendOptions{ThreadID: r.cfg.RemindersTopicID})
+	groupMsg := r.i18n.T(r.cfg.DefaultLocale, kind.keys.postponed, emoji, name, memberName(member), dueStr)
+	_, _ = r.client.SendMessage(ctx, r.cfg.ChatID, groupMsg, &SendOptions{ThreadID: kind.topic})
 }
 
 // postponePayload is the flow payload while waiting for a typed postponement time.
@@ -721,19 +590,15 @@ func (r *Router) handleTypedPostponeText(ctx context.Context, member *household.
 	}
 
 	_ = r.flow.Clear(ctx, state.Key)
+	kind := r.remindersKind()
 	if strings.HasPrefix(state.Step, "chore_") {
-		occ, err := r.chores.Postpone(ctx, member.ID, payload.OccID, newDue)
-		if err != nil {
-			return reply(r.postponeErrorText(locale, err))
-		}
-		r.postChorePostponed(ctx, member, occ, newDue)
-	} else {
-		occ, err := r.reminders.Postpone(ctx, member.ID, payload.OccID, newDue)
-		if err != nil {
-			return reply(r.postponeErrorText(locale, err))
-		}
-		r.postReminderPostponed(ctx, member, occ, newDue)
+		kind = r.choresKind()
 	}
+	occ, err := kind.postpone(ctx, member.ID, payload.OccID, newDue)
+	if err != nil {
+		return reply(r.postponeErrorText(locale, err))
+	}
+	r.postPostponed(ctx, kind, member, occ, newDue)
 	return reply(r.i18n.T(locale, "general.postponed_until", r.formatDateTime(locale, newDue)))
 }
 
