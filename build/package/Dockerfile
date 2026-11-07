@@ -1,5 +1,5 @@
 # Build stage
-FROM golang:1.27.2 AS builder
+FROM golang:1.27.3 AS builder
 
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -9,7 +9,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /app/homectl ./cmd/homectl
 
 # Runtime stage
-FROM alpine:3.24.2
+FROM alpine:3.24.4
 
 RUN apk --no-cache add ca-certificates tzdata \
     && addgroup -S app && adduser -S -G app app
