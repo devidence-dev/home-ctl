@@ -82,6 +82,15 @@ func TestHouseholdStore_OnboardingAndStatus(t *testing.T) {
 	ctx := context.Background()
 	store := sqlite.NewHouseholdStore(db)
 
+	householdStoreOnboardMembers(ctx, t, store)
+	householdStoreCheckStatusList(ctx, t, store)
+	householdStoreDisconnectBob(ctx, t, store)
+}
+
+// householdStoreOnboardMembers syncs three members, onboards Alice and Bob, and checks that
+// Charlie is not connected.
+func householdStoreOnboardMembers(ctx context.Context, t *testing.T, store *sqlite.HouseholdStore) {
+	t.Helper()
 	cfg := []config.UserConfig{
 		{ID: 1001, Name: "Alice"},
 		{ID: 1002, Name: "Bob"},
@@ -108,8 +117,11 @@ func TestHouseholdStore_OnboardingAndStatus(t *testing.T) {
 	if charlieState.Connected {
 		t.Fatalf("expected Charlie to be not connected")
 	}
+}
 
-	// Check status list
+// householdStoreCheckStatusList checks the status list connection flags for all three members.
+func householdStoreCheckStatusList(ctx context.Context, t *testing.T, store *sqlite.HouseholdStore) {
+	t.Helper()
 	statusList, err := store.GetStatusList(ctx)
 	if err != nil {
 		t.Fatalf("GetStatusList failed: %v", err)
@@ -132,7 +144,11 @@ func TestHouseholdStore_OnboardingAndStatus(t *testing.T) {
 	if !aliceConn || !bobConn || charlieConn {
 		t.Fatalf("expected Alice=true, Bob=true, Charlie=false; got Alice=%v, Bob=%v, Charlie=%v", aliceConn, bobConn, charlieConn)
 	}
+}
 
+// householdStoreDisconnectBob records Bob's disconnect (e.g. blocked bot) and checks it.
+func householdStoreDisconnectBob(ctx context.Context, t *testing.T, store *sqlite.HouseholdStore) {
+	t.Helper()
 	// Bob disconnects (e.g. blocked bot)
 	if err := store.RecordDisconnect(ctx, 1002); err != nil {
 		t.Fatalf("RecordDisconnect failed: %v", err)

@@ -110,13 +110,16 @@ func (f *fakeStore) GetStatusList(_ context.Context) ([]household.MemberStatus, 
 	return list, nil
 }
 
-func TestHouseholdService(t *testing.T) {
-	ctx := context.Background()
-	store := newFakeStore()
-	svc := household.NewService(store)
+type householdServiceFixture struct {
+	ctx   context.Context
+	store *fakeStore
+	svc   *household.Service
+}
 
+func householdCheckSyncAndAuthorize(t *testing.T, f *householdServiceFixture) {
+	t.Helper()
 	// 1. Sync from config
-	err := svc.SyncFromConfig(ctx, []config.UserConfig{
+	err := f.svc.SyncFromConfig(f.ctx, []config.UserConfig{
 		{ID: 1001, Name: "Alice", Locale: "en"},
 		{ID: 1002, Name: "Bob", Locale: "es"},
 	}, "en")
@@ -125,79 +128,98 @@ func TestHouseholdService(t *testing.T) {
 	}
 
 	// 2. Authorize
-	alice, err := svc.Authorize(ctx, 1001)
+	alice, err := f.svc.Authorize(f.ctx, 1001)
 	if err != nil || alice.Name != "Alice" {
 		t.Fatalf("authorize Alice failed: %v", err)
 	}
 
 	// Non-member authorization fails with ErrNotMember
-	_, err = svc.Authorize(ctx, 9999)
+	_, err = f.svc.Authorize(f.ctx, 9999)
 	if !errors.Is(err, household.ErrNotMember) {
 		t.Fatalf("expected ErrNotMember for unknown user, got %v", err)
 	}
+}
 
+func householdCheckEnsureConnected(t *testing.T, f *householdServiceFixture) {
+	t.Helper()
 	// 3. EnsureConnected
 	// Non-member private activity is rejected and records nothing
-	if err := svc.EnsureConnected(ctx, 9999, time.Now()); !errors.Is(err, household.ErrNotMember) {
+	if err := f.svc.EnsureConnected(f.ctx, 9999, time.Now()); !errors.Is(err, household.ErrNotMember) {
 		t.Fatalf("expected ErrNotMember for unknown user, got %v", err)
 	}
-	if conn, _ := svc.IsConnected(ctx, 9999); conn {
+	if conn, _ := f.svc.IsConnected(f.ctx, 9999); conn {
 		t.Fatalf("non-member must not be recorded as connected")
 	}
 
 	// Alice's first private activity connects her and keeps that timestamp
 	first := time.Date(2026, 10, 9, 23, 10, 0, 0, time.UTC)
-	if err := svc.EnsureConnected(ctx, 1001, first); err != nil {
+	if err := f.svc.EnsureConnected(f.ctx, 1001, first); err != nil {
 		t.Fatalf("Alice EnsureConnected failed: %v", err)
 	}
-	conn, err := svc.IsConnected(ctx, 1001)
+	conn, err := f.svc.IsConnected(f.ctx, 1001)
 	if err != nil || !conn {
 		t.Fatalf("expected Alice connected, got %v, err=%v", conn, err)
 	}
-	if err := svc.EnsureConnected(ctx, 1001, first.Add(time.Hour)); err != nil {
+	if err := f.svc.EnsureConnected(f.ctx, 1001, first.Add(time.Hour)); err != nil {
 		t.Fatalf("repeated EnsureConnected failed: %v", err)
 	}
-	if got := store.onboarding[1001].ConnectedAt; got == nil || !got.Equal(first) {
+	if got := f.store.onboarding[1001].ConnectedAt; got == nil || !got.Equal(first) {
 		t.Fatalf("expected first connection timestamp %v kept, got %v", first, got)
 	}
 
 	// Bob is not connected
-	connBob, err := svc.IsConnected(ctx, 1002)
+	connBob, err := f.svc.IsConnected(f.ctx, 1002)
 	if err != nil || connBob {
 		t.Fatalf("expected Bob not connected, got %v", connBob)
 	}
+}
 
+func householdCheckStatusAndDeactivation(t *testing.T, f *householdServiceFixture) {
+	t.Helper()
 	// 4. Status list
-	statusList, err := svc.GetStatus(ctx)
+	statusList, err := f.svc.GetStatus(f.ctx)
 	if err != nil || len(statusList) != 2 {
 		t.Fatalf("expected 2 status entries, got %v", statusList)
 	}
 
 	// 5. Disconnect
-	if err := svc.HandleDisconnect(ctx, 1001); err != nil {
+	if err := f.svc.HandleDisconnect(f.ctx, 1001); err != nil {
 		t.Fatalf("disconnect failed: %v", err)
 	}
-	connAfter, err := svc.IsConnected(ctx, 1001)
+	connAfter, err := f.svc.IsConnected(f.ctx, 1001)
 	if err != nil || connAfter {
 		t.Fatalf("expected Alice disconnected after HandleDisconnect")
 	}
 
 	// 6. Deactivated user authorization
-	err = svc.SyncFromConfig(ctx, []config.UserConfig{
+	err = f.svc.SyncFromConfig(f.ctx, []config.UserConfig{
 		{ID: 1001, Name: "Alice"},
 	}, "en")
 	if err != nil {
 		t.Fatalf("sync failed: %v", err)
 	}
 	// Bob is now removed from config
-	_, err = svc.Authorize(ctx, 1002)
+	_, err = f.svc.Authorize(f.ctx, 1002)
 	if !errors.Is(err, household.ErrMemberInactive) {
 		t.Fatalf("expected ErrMemberInactive for Bob, got %v", err)
 	}
 
 	// ListActiveMembers
-	active, err := svc.ListActiveMembers(ctx)
+	active, err := f.svc.ListActiveMembers(f.ctx)
 	if err != nil || len(active) != 1 {
 		t.Fatalf("expected 1 active member, got %v", active)
 	}
+}
+
+func TestHouseholdService(t *testing.T) {
+	store := newFakeStore()
+	f := &householdServiceFixture{
+		ctx:   context.Background(),
+		store: store,
+		svc:   household.NewService(store),
+	}
+
+	householdCheckSyncAndAuthorize(t, f)
+	householdCheckEnsureConnected(t, f)
+	householdCheckStatusAndDeactivation(t, f)
 }

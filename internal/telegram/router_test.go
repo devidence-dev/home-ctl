@@ -432,11 +432,23 @@ func TestFlow_EditFailureIgnored_FlowStillCompletes(t *testing.T) {
 	}
 }
 
+// routerTestChoreMsgID is the message ID of Alice's Chores flow message in TestFlowOwnership_EnforcementAndExpiry.
+const routerTestChoreMsgID int64 = 700
+
 func TestFlowOwnership_EnforcementAndExpiry(t *testing.T) {
 	env, err := setupTestEnv()
 	if err != nil {
 		t.Fatalf("setup failed: %v", err)
 	}
+
+	routerTestBobCannotCancelAliceChores(t, env)
+	routerTestBobCannotPickAliceShoppingItem(t, env)
+	routerTestAlicePressAfterExpiry(t, env)
+}
+
+// routerTestBobCannotCancelAliceChores: Bob's cancel on Alice's Chores flow message gets the ownership notice and changes nothing.
+func routerTestBobCannotCancelAliceChores(t *testing.T, env *testEnv) {
+	t.Helper()
 	ctx := context.Background()
 
 	// 1. Alice has a Chores flow with a flow message
@@ -444,8 +456,7 @@ func TestFlowOwnership_EnforcementAndExpiry(t *testing.T) {
 	if err := env.flow.Set(ctx, choreFlowKey, "chore_select_def", nil, 10*time.Minute); err != nil {
 		t.Fatalf("flow.Set failed: %v", err)
 	}
-	choreMsgID := int64(700)
-	if err := env.flow.SetMessageID(ctx, choreFlowKey, choreMsgID); err != nil {
+	if err := env.flow.SetMessageID(ctx, choreFlowKey, routerTestChoreMsgID); err != nil {
 		t.Fatalf("SetMessageID failed: %v", err)
 	}
 
@@ -458,7 +469,7 @@ func TestFlowOwnership_EnforcementAndExpiry(t *testing.T) {
 			ID:   "cb_bob_cancel",
 			From: telegram.User{ID: 102, FirstName: "Bob"},
 			Message: &telegram.Message{
-				MessageID:       choreMsgID,
+				MessageID:       routerTestChoreMsgID,
 				MessageThreadID: 51,
 				Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
 				Text:            "Select a chore",
@@ -482,6 +493,12 @@ func TestFlowOwnership_EnforcementAndExpiry(t *testing.T) {
 	if err != nil || aliceChoreState.Step != "chore_select_def" {
 		t.Fatalf("expected Alice chores flow to remain intact, got %+v, err=%v", aliceChoreState, err)
 	}
+}
+
+// routerTestBobCannotPickAliceShoppingItem: Bob's press on Alice's Shopping menu is refused and adds nothing to the list.
+func routerTestBobCannotPickAliceShoppingItem(t *testing.T, env *testEnv) {
+	t.Helper()
+	ctx := context.Background()
 
 	// 2. Alice starts a Shopping flow with items
 	item, err := env.shopping.CreateItem(ctx, 101, "Milk", "🥛")
@@ -546,6 +563,12 @@ func TestFlowOwnership_EnforcementAndExpiry(t *testing.T) {
 	if err != nil || aliceShopState.Step != "shopping_select_items" {
 		t.Fatalf("expected Alice shopping flow to remain intact, got %+v", aliceShopState)
 	}
+}
+
+// routerTestAlicePressAfterExpiry: after the flow TTL, Alice's press on the chores message gets the expiry alert and closes its keyboard.
+func routerTestAlicePressAfterExpiry(t *testing.T, env *testEnv) {
+	t.Helper()
+	ctx := context.Background()
 
 	// 3. Alice pressing after expiry
 	env.clock.now = env.clock.now.Add(2 * time.Hour)
@@ -556,7 +579,7 @@ func TestFlowOwnership_EnforcementAndExpiry(t *testing.T) {
 			ID:   "cb_alice_exp",
 			From: telegram.User{ID: 101, FirstName: "Alice"},
 			Message: &telegram.Message{
-				MessageID:       choreMsgID,
+				MessageID:       routerTestChoreMsgID,
 				MessageThreadID: 51,
 				Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
 				Text:            "Select a chore",
@@ -572,8 +595,8 @@ func TestFlowOwnership_EnforcementAndExpiry(t *testing.T) {
 		t.Fatalf("expected flow_expired alert for Alice after expiry, got %+v", ansExp)
 	}
 	lastEdited := env.client.LastEdited()
-	if lastEdited == nil || lastEdited.MessageID != choreMsgID {
-		t.Fatalf("expected keyboard on chore message %d to be closed after expiry, got %+v", choreMsgID, lastEdited)
+	if lastEdited == nil || lastEdited.MessageID != routerTestChoreMsgID {
+		t.Fatalf("expected keyboard on chore message %d to be closed after expiry, got %+v", routerTestChoreMsgID, lastEdited)
 	}
 	if lastEdited.Markup == nil || len(lastEdited.Markup.InlineKeyboard) != 0 {
 		t.Fatalf("expected empty keyboard markup, got %+v", lastEdited.Markup)

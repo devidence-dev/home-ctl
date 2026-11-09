@@ -27,13 +27,25 @@ func TestShowFlowMessage(t *testing.T) {
 		t.Fatalf("flow.Get failed: %v", err)
 	}
 
-	// 1. Initial message send (state.MessageID == 0)
 	markup := &telegram.InlineKeyboardMarkup{
 		InlineKeyboard: [][]telegram.InlineKeyboardButton{
 			{{Text: "Option 1", CallbackData: "opt:1"}},
 		},
 	}
-	err = env.router.ShowFlowMessageForTest(ctx, state, "Initial prompt", markup)
+	// 1. Initial message send
+	initialMsgID := flowMessageTestInitialSend(t, env, key, state, markup)
+	sentCountBefore := len(env.client.sentMessages)
+	flowMessageTestNormalEdit(t, env, state, markup, initialMsgID, sentCountBefore)
+	flowMessageTestNotModified(t, env, state, markup, initialMsgID, sentCountBefore)
+	newMsgID := flowMessageTestFailedEditFallback(t, env, key, state, markup, initialMsgID)
+	flowMessageTestForceSend(t, env, state, markup, newMsgID)
+}
+
+// flowMessageTestInitialSend covers step 1: the first show sends a message and persists its ID.
+func flowMessageTestInitialSend(t *testing.T, env *testEnv, key flow.Key, state *flow.State, markup *telegram.InlineKeyboardMarkup) int64 {
+	t.Helper()
+	ctx := context.Background()
+	err := env.router.ShowFlowMessageForTest(ctx, state, "Initial prompt", markup)
 	if err != nil {
 		t.Fatalf("ShowFlowMessageForTest failed on initial send: %v", err)
 	}
@@ -47,10 +59,14 @@ func TestShowFlowMessage(t *testing.T) {
 	if err != nil || persisted.MessageID != initialMsgID {
 		t.Fatalf("expected persisted message_id %d, got %d, err=%v", initialMsgID, persisted.MessageID, err)
 	}
+	return initialMsgID
+}
 
-	// 2. Normal step edits the same id
-	sentCountBefore := len(env.client.sentMessages)
-	err = env.router.ShowFlowMessageForTest(ctx, state, "Step 2 prompt", markup)
+// flowMessageTestNormalEdit covers step 2: a normal step edits the same message ID.
+func flowMessageTestNormalEdit(t *testing.T, env *testEnv, state *flow.State, markup *telegram.InlineKeyboardMarkup, initialMsgID int64, sentCountBefore int) {
+	t.Helper()
+	ctx := context.Background()
+	err := env.router.ShowFlowMessageForTest(ctx, state, "Step 2 prompt", markup)
 	if err != nil {
 		t.Fatalf("ShowFlowMessageForTest failed on normal edit: %v", err)
 	}
@@ -64,12 +80,16 @@ func TestShowFlowMessage(t *testing.T) {
 	if edited == nil || edited.MessageID != initialMsgID || edited.Text != "Step 2 prompt" {
 		t.Fatalf("unexpected edited message: %+v", edited)
 	}
+}
 
-	// 3. Edit error "message is not modified" is not treated as failure and does not send replacement
+// flowMessageTestNotModified covers step 3: "message is not modified" is not a failure and sends nothing.
+func flowMessageTestNotModified(t *testing.T, env *testEnv, state *flow.State, markup *telegram.InlineKeyboardMarkup, initialMsgID int64, sentCountBefore int) {
+	t.Helper()
+	ctx := context.Background()
 	env.client.onEditMessageText = func(_ context.Context, _ int64, _ int64, _ string, _ *telegram.EditOptions) error {
 		return errors.New("Bad Request: message is not modified: specified new message content and reply markup are exactly the same")
 	}
-	err = env.router.ShowFlowMessageForTest(ctx, state, "Step 2 prompt", markup)
+	err := env.router.ShowFlowMessageForTest(ctx, state, "Step 2 prompt", markup)
 	if err != nil {
 		t.Fatalf("expected no error for 'message is not modified', got %v", err)
 	}
@@ -79,12 +99,16 @@ func TestShowFlowMessage(t *testing.T) {
 	if state.MessageID != initialMsgID {
 		t.Fatalf("expected messageID %d to remain unchanged, got %d", initialMsgID, state.MessageID)
 	}
+}
 
-	// 4. Failing edit sends a replacement and updates the stored id
+// flowMessageTestFailedEditFallback covers step 4: a failing edit sends a replacement and updates the stored ID.
+func flowMessageTestFailedEditFallback(t *testing.T, env *testEnv, key flow.Key, state *flow.State, markup *telegram.InlineKeyboardMarkup, initialMsgID int64) int64 {
+	t.Helper()
+	ctx := context.Background()
 	env.client.onEditMessageText = func(_ context.Context, _ int64, _ int64, _ string, _ *telegram.EditOptions) error {
 		return errors.New("Bad Request: message to edit not found")
 	}
-	err = env.router.ShowFlowMessageForTest(ctx, state, "Step 3 replacement prompt", markup)
+	err := env.router.ShowFlowMessageForTest(ctx, state, "Step 3 replacement prompt", markup)
 	if err != nil {
 		t.Fatalf("expected fallback send to succeed, got: %v", err)
 	}
@@ -102,10 +126,15 @@ func TestShowFlowMessage(t *testing.T) {
 	if err != nil || persistedAfterFallback.MessageID != newMsgID {
 		t.Fatalf("expected persisted message_id %d after fallback, got %d, err=%v", newMsgID, persistedAfterFallback.MessageID, err)
 	}
+	return newMsgID
+}
 
-	// 5. Force send mode always sends and updates message ID
+// flowMessageTestForceSend covers step 5: force send mode always sends and updates the message ID.
+func flowMessageTestForceSend(t *testing.T, env *testEnv, state *flow.State, markup *telegram.InlineKeyboardMarkup, newMsgID int64) {
+	t.Helper()
+	ctx := context.Background()
 	env.client.onEditMessageText = nil
-	err = env.router.ShowFlowMessageForTest(ctx, state, "Force send prompt", markup, true)
+	err := env.router.ShowFlowMessageForTest(ctx, state, "Force send prompt", markup, true)
 	if err != nil {
 		t.Fatalf("ShowFlowMessageForTest failed with forceSend: %v", err)
 	}

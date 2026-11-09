@@ -10,16 +10,39 @@ import (
 	"github.com/px1/home-ctl/internal/telegram"
 )
 
-func TestPrivateList_NavigationAndActions(t *testing.T) {
-	env, err := setupTestEnv()
-	if err != nil {
-		t.Fatalf("failed to setup test env: %v", err)
+var (
+	listTestAlice = telegram.User{ID: 101, FirstName: "Alice"}
+	listTestBob   = telegram.User{ID: 102, FirstName: "Bob"}
+)
+
+// listTestCallback builds a button press on message 100 of the private chat chatID.
+func listTestCallback(updateID int64, cbID string, from telegram.User, chatID int64, data string) telegram.Update {
+	return telegram.Update{
+		UpdateID: updateID,
+		CallbackQuery: &telegram.CallbackQuery{
+			ID:   cbID,
+			From: from,
+			Message: &telegram.Message{
+				MessageID: 100,
+				Chat:      telegram.Chat{ID: chatID, Type: "private"},
+			},
+			Data: data,
+		},
 	}
+}
 
-	ctx := context.Background()
+// listTestHandle routes one update and fails the test on error.
+func listTestHandle(ctx context.Context, t *testing.T, env *testEnv, u telegram.Update) {
+	t.Helper()
+	if err := env.router.HandleUpdate(ctx, u); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
 
-	// 1. Unconnected member Charlie (103) sends /list in Chores topic -> short notice, no list in group
-	uCharlieList := telegram.Update{
+// listTestUnconnectedNotice: unconnected Charlie gets a /start notice in the chores topic.
+func listTestUnconnectedNotice(ctx context.Context, t *testing.T, env *testEnv) {
+	t.Helper()
+	listTestHandle(ctx, t, env, telegram.Update{
 		UpdateID: 1,
 		Message: &telegram.Message{
 			MessageID:       10,
@@ -28,10 +51,7 @@ func TestPrivateList_NavigationAndActions(t *testing.T) {
 			From:            &telegram.User{ID: 103, FirstName: "Charlie"},
 			Text:            "/list",
 		},
-	}
-	if err := env.router.HandleUpdate(ctx, uCharlieList); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	})
 	last := env.client.LastSent()
 	if last == nil || !strings.Contains(last.Text, "/start") {
 		t.Fatalf("expected unconnected notice, got: %+v", last)
@@ -39,8 +59,11 @@ func TestPrivateList_NavigationAndActions(t *testing.T) {
 	if last.ChatID != -1001234567890 || last.ThreadID != 51 {
 		t.Fatalf("expected notice sent to group chores topic, got: %+v", last)
 	}
+}
 
-	// 2. Schedule two chores for Alice
+// listTestScheduleChores schedules two chores for Alice and returns their occurrence IDs.
+func listTestScheduleChores(ctx context.Context, t *testing.T, env *testEnv) (int64, int64) {
+	t.Helper()
 	def1, err := env.chores.CreateDefinition(ctx, 101, "Clean bathroom", "🚿", "", nil)
 	if err != nil {
 		t.Fatalf("failed to create chore 1: %v", err)
@@ -58,9 +81,13 @@ func TestPrivateList_NavigationAndActions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to schedule occ 2: %v", err)
 	}
+	return occ1.ID, occ2.ID
+}
 
-	// 3. Connected member Alice runs /list in Chores topic -> delivered to Alice's private chat (ChatID: 101)
-	uAliceList := telegram.Update{
+// listTestAliceOpensList: Alice's /list in the chores topic lands in her private chat.
+func listTestAliceOpensList(ctx context.Context, t *testing.T, env *testEnv) {
+	t.Helper()
+	listTestHandle(ctx, t, env, telegram.Update{
 		UpdateID: 2,
 		Message: &telegram.Message{
 			MessageID:       20,
@@ -69,34 +96,20 @@ func TestPrivateList_NavigationAndActions(t *testing.T) {
 			From:            &telegram.User{ID: 101, FirstName: "Alice"},
 			Text:            "/list",
 		},
-	}
-	if err := env.router.HandleUpdate(ctx, uAliceList); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	last = env.client.LastSent()
+	})
+	last := env.client.LastSent()
 	if last == nil || last.ChatID != 101 {
 		t.Fatalf("expected list sent to Alice private chat, got: %+v", last)
 	}
 	if len(last.Markup.InlineKeyboard) != 3 { // 2 chore buttons + view switch row
 		t.Fatalf("expected 2 chore buttons and a switch row, got: %d", len(last.Markup.InlineKeyboard))
 	}
+}
 
-	// 4. Detail view navigation: Alice taps "🚿 Clean bathroom" (ch:d:<occ1.ID>)
-	uDetail := telegram.Update{
-		UpdateID: 3,
-		CallbackQuery: &telegram.CallbackQuery{
-			ID:   "cb_detail",
-			From: telegram.User{ID: 101, FirstName: "Alice"},
-			Message: &telegram.Message{
-				MessageID: 100,
-				Chat:      telegram.Chat{ID: 101, Type: "private"},
-			},
-			Data: fmt.Sprintf("ch:d:%d", occ1.ID),
-		},
-	}
-	if err := env.router.HandleUpdate(ctx, uDetail); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+// listTestDetailView: Alice taps a chore and sees its detail view with icon buttons.
+func listTestDetailView(ctx context.Context, t *testing.T, env *testEnv, occ1ID int64) {
+	t.Helper()
+	listTestHandle(ctx, t, env, listTestCallback(3, "cb_detail", listTestAlice, 101, fmt.Sprintf("ch:d:%d", occ1ID)))
 	edited := env.client.LastEdited()
 	if edited == nil || !strings.Contains(edited.Text, "Clean bathroom") {
 		t.Fatalf("expected detail view text, got: %+v", edited)
@@ -115,67 +128,30 @@ func TestPrivateList_NavigationAndActions(t *testing.T) {
 	if len(edited.Markup.InlineKeyboard) != 2 { // Row 1: Done/Postpone, Row 2: Back
 		t.Fatalf("expected detail buttons, got: %+v", edited.Markup)
 	}
+}
 
-	// 5. Back navigation: Alice taps Back ("list:ch")
-	uBack := telegram.Update{
-		UpdateID: 4,
-		CallbackQuery: &telegram.CallbackQuery{
-			ID:   "cb_back",
-			From: telegram.User{ID: 101, FirstName: "Alice"},
-			Message: &telegram.Message{
-				MessageID: 100,
-				Chat:      telegram.Chat{ID: 101, Type: "private"},
-			},
-			Data: "list:ch",
-		},
-	}
-	if err := env.router.HandleUpdate(ctx, uBack); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	edited = env.client.LastEdited()
+// listTestBackToList: Alice taps Back and the list view is shown again.
+func listTestBackToList(ctx context.Context, t *testing.T, env *testEnv) {
+	t.Helper()
+	listTestHandle(ctx, t, env, listTestCallback(4, "cb_back", listTestAlice, 101, "list:ch"))
+	edited := env.client.LastEdited()
 	if edited == nil || !strings.Contains(edited.Text, "Your Open Chores") {
 		t.Fatalf("expected list view after Back, got: %+v", edited)
 	}
+}
 
-	// 6. Postpone navigation: Alice opens detail for occ2, then taps Postpone ("ch:p:<occ2.ID>")
-	uPostponeMenu := telegram.Update{
-		UpdateID: 5,
-		CallbackQuery: &telegram.CallbackQuery{
-			ID:   "cb_p_menu",
-			From: telegram.User{ID: 101, FirstName: "Alice"},
-			Message: &telegram.Message{
-				MessageID: 100,
-				Chat:      telegram.Chat{ID: 101, Type: "private"},
-			},
-			Data: fmt.Sprintf("ch:p:%d", occ2.ID),
-		},
-	}
-	if err := env.router.HandleUpdate(ctx, uPostponeMenu); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	edited = env.client.LastEdited()
+// listTestPostponePreset: Alice opens the postpone menu for occ2 and picks the 1h preset.
+func listTestPostponePreset(ctx context.Context, t *testing.T, env *testEnv, occ2ID int64) {
+	t.Helper()
+	listTestHandle(ctx, t, env, listTestCallback(5, "cb_p_menu", listTestAlice, 101, fmt.Sprintf("ch:p:%d", occ2ID)))
+	edited := env.client.LastEdited()
 	if edited == nil || !strings.Contains(edited.Text, "duration") {
 		t.Fatalf("expected postpone duration menu, got: %+v", edited)
 	}
 
-	// 7. Alice chooses "1h" preset ("ch:p:<occ2.ID>:1h")
-	uPostpone1h := telegram.Update{
-		UpdateID: 6,
-		CallbackQuery: &telegram.CallbackQuery{
-			ID:   "cb_p_1h",
-			From: telegram.User{ID: 101, FirstName: "Alice"},
-			Message: &telegram.Message{
-				MessageID: 100,
-				Chat:      telegram.Chat{ID: 101, Type: "private"},
-			},
-			Data: fmt.Sprintf("ch:p:%d:1h", occ2.ID),
-		},
-	}
-	if err := env.router.HandleUpdate(ctx, uPostpone1h); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	listTestHandle(ctx, t, env, listTestCallback(6, "cb_p_1h", listTestAlice, 101, fmt.Sprintf("ch:p:%d:1h", occ2ID)))
 	// Verify group topic update was posted in Chores topic
-	last = env.client.LastSent()
+	last := env.client.LastSent()
 	if last == nil || !strings.Contains(last.Text, "postponed it until") {
 		t.Fatalf("expected group postpone update, got: %+v", last)
 	}
@@ -184,44 +160,35 @@ func TestPrivateList_NavigationAndActions(t *testing.T) {
 	if edited == nil || !strings.Contains(edited.Text, "Your Open Chores") {
 		t.Fatalf("expected list view after postpone, got: %+v", edited)
 	}
+}
 
-	// 8. Done action: Alice completes occ1 ("ch:c:<occ1.ID>")
-	uDone := telegram.Update{
-		UpdateID: 7,
-		CallbackQuery: &telegram.CallbackQuery{
-			ID:   "cb_done",
-			From: telegram.User{ID: 101, FirstName: "Alice"},
-			Message: &telegram.Message{
-				MessageID: 100,
-				Chat:      telegram.Chat{ID: 101, Type: "private"},
-			},
-			Data: fmt.Sprintf("ch:c:%d", occ1.ID),
-		},
-	}
-	if err := env.router.HandleUpdate(ctx, uDone); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	last = env.client.LastSent()
+// listTestDoneThenStale: Alice completes occ1, then taps its stale Done button again without error.
+func listTestDoneThenStale(ctx context.Context, t *testing.T, env *testEnv, occ1ID int64) {
+	t.Helper()
+	listTestHandle(ctx, t, env, listTestCallback(7, "cb_done", listTestAlice, 101, fmt.Sprintf("ch:c:%d", occ1ID)))
+	last := env.client.LastSent()
 	if last == nil || !strings.Contains(last.Text, "completed by Alice") {
 		t.Fatalf("expected group completion update, got: %+v", last)
 	}
 
-	// 9. Stale detail view: Alice taps Done again on occ1 -> re-renders current list without error
-	uStaleDone := telegram.Update{
-		UpdateID: 8,
-		CallbackQuery: &telegram.CallbackQuery{
-			ID:   "cb_stale",
-			From: telegram.User{ID: 101, FirstName: "Alice"},
-			Message: &telegram.Message{
-				MessageID: 100,
-				Chat:      telegram.Chat{ID: 101, Type: "private"},
-			},
-			Data: fmt.Sprintf("ch:c:%d", occ1.ID),
-		},
+	listTestHandle(ctx, t, env, listTestCallback(8, "cb_stale", listTestAlice, 101, fmt.Sprintf("ch:c:%d", occ1ID)))
+}
+
+func TestPrivateList_NavigationAndActions(t *testing.T) {
+	env, err := setupTestEnv()
+	if err != nil {
+		t.Fatalf("failed to setup test env: %v", err)
 	}
-	if err := env.router.HandleUpdate(ctx, uStaleDone); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+
+	ctx := context.Background()
+
+	listTestUnconnectedNotice(ctx, t, env)
+	occ1ID, occ2ID := listTestScheduleChores(ctx, t, env)
+	listTestAliceOpensList(ctx, t, env)
+	listTestDetailView(ctx, t, env, occ1ID)
+	listTestBackToList(ctx, t, env)
+	listTestPostponePreset(ctx, t, env, occ2ID)
+	listTestDoneThenStale(ctx, t, env, occ1ID)
 }
 
 func TestPrivateList_LongList(t *testing.T) {
@@ -266,15 +233,10 @@ func TestPrivateList_LongList(t *testing.T) {
 	}
 }
 
-func TestPrivateList_RemindersNavigationAndActions(t *testing.T) {
-	env, err := setupTestEnv()
-	if err != nil {
-		t.Fatalf("failed to setup test env: %v", err)
-	}
-
-	ctx := context.Background()
-
-	// 1. Schedule a reminder for Bob (102)
+// listTestReminderOpen: a reminder for Bob, opened by Bob's /list in the reminders topic.
+// Returns the occurrence ID.
+func listTestReminderOpen(ctx context.Context, t *testing.T, env *testEnv) int64 {
+	t.Helper()
 	def, err := env.reminders.CreateDefinition(ctx, 101, 102, "Call doctor", "⏰", "", nil)
 	if err != nil {
 		t.Fatalf("failed to create reminder def: %v", err)
@@ -284,8 +246,8 @@ func TestPrivateList_RemindersNavigationAndActions(t *testing.T) {
 		t.Fatalf("failed to schedule reminder occ: %v", err)
 	}
 
-	// 2. Bob runs /list in Reminders topic (63) -> sent to Bob's private chat (102)
-	uList := telegram.Update{
+	// Bob runs /list in Reminders topic (63) -> sent to Bob's private chat (102)
+	listTestHandle(ctx, t, env, telegram.Update{
 		UpdateID: 1,
 		Message: &telegram.Message{
 			MessageID:       10,
@@ -294,31 +256,18 @@ func TestPrivateList_RemindersNavigationAndActions(t *testing.T) {
 			From:            &telegram.User{ID: 102, FirstName: "Bob"},
 			Text:            "/list",
 		},
-	}
-	if err := env.router.HandleUpdate(ctx, uList); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	})
 	last := env.client.LastSent()
 	if last == nil || last.ChatID != 102 {
 		t.Fatalf("expected list sent to Bob's private chat, got: %+v", last)
 	}
+	return occ.ID
+}
 
-	// 3. Detail view: Bob taps Call doctor ("re:d:<occ.ID>")
-	uDetail := telegram.Update{
-		UpdateID: 2,
-		CallbackQuery: &telegram.CallbackQuery{
-			ID:   "cb_detail",
-			From: telegram.User{ID: 102, FirstName: "Bob"},
-			Message: &telegram.Message{
-				MessageID: 100,
-				Chat:      telegram.Chat{ID: 102, Type: "private"},
-			},
-			Data: fmt.Sprintf("re:d:%d", occ.ID),
-		},
-	}
-	if err := env.router.HandleUpdate(ctx, uDetail); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+// listTestReminderDetailAndBack: Bob opens the reminder detail, then taps Back to the reminders list.
+func listTestReminderDetailAndBack(ctx context.Context, t *testing.T, env *testEnv, occID int64) {
+	t.Helper()
+	listTestHandle(ctx, t, env, listTestCallback(2, "cb_detail", listTestBob, 102, fmt.Sprintf("re:d:%d", occID)))
 	edited := env.client.LastEdited()
 	if edited == nil || !strings.Contains(edited.Text, "Call doctor") {
 		t.Fatalf("expected detail view text, got: %+v", edited)
@@ -327,121 +276,55 @@ func TestPrivateList_RemindersNavigationAndActions(t *testing.T) {
 		t.Fatalf("expected reminder detail title with its emoji once, got: %q", edited.Text)
 	}
 
-	// 4. Back navigation: Bob taps Back ("list:re")
-	uBack := telegram.Update{
-		UpdateID: 3,
-		CallbackQuery: &telegram.CallbackQuery{
-			ID:   "cb_back",
-			From: telegram.User{ID: 102, FirstName: "Bob"},
-			Message: &telegram.Message{
-				MessageID: 100,
-				Chat:      telegram.Chat{ID: 102, Type: "private"},
-			},
-			Data: "list:re",
-		},
-	}
-	if err := env.router.HandleUpdate(ctx, uBack); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	listTestHandle(ctx, t, env, listTestCallback(3, "cb_back", listTestBob, 102, "list:re"))
 	edited = env.client.LastEdited()
 	if edited == nil || !strings.Contains(edited.Text, "Your Open Reminders") {
 		t.Fatalf("expected reminders list view after Back, got: %+v", edited)
 	}
+}
 
-	// 5. Postpone: Bob opens postpone menu ("re:p:<occ.ID>")
-	uPostponeMenu := telegram.Update{
-		UpdateID: 4,
-		CallbackQuery: &telegram.CallbackQuery{
-			ID:   "cb_p_menu",
-			From: telegram.User{ID: 102, FirstName: "Bob"},
-			Message: &telegram.Message{
-				MessageID: 100,
-				Chat:      telegram.Chat{ID: 102, Type: "private"},
-			},
-			Data: fmt.Sprintf("re:p:%d", occ.ID),
-		},
-	}
-	if err := env.router.HandleUpdate(ctx, uPostponeMenu); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	// 6. Bob selects "1h" preset ("re:p:<occ.ID>:1h")
-	uPostpone1h := telegram.Update{
-		UpdateID: 5,
-		CallbackQuery: &telegram.CallbackQuery{
-			ID:   "cb_p_1h",
-			From: telegram.User{ID: 102, FirstName: "Bob"},
-			Message: &telegram.Message{
-				MessageID: 100,
-				Chat:      telegram.Chat{ID: 102, Type: "private"},
-			},
-			Data: fmt.Sprintf("re:p:%d:1h", occ.ID),
-		},
-	}
-	if err := env.router.HandleUpdate(ctx, uPostpone1h); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	last = env.client.LastSent()
+// listTestReminderPostpone: Bob opens the postpone menu and selects the 1h preset.
+func listTestReminderPostpone(ctx context.Context, t *testing.T, env *testEnv, occID int64) {
+	t.Helper()
+	listTestHandle(ctx, t, env, listTestCallback(4, "cb_p_menu", listTestBob, 102, fmt.Sprintf("re:p:%d", occID)))
+	listTestHandle(ctx, t, env, listTestCallback(5, "cb_p_1h", listTestBob, 102, fmt.Sprintf("re:p:%d:1h", occID)))
+	last := env.client.LastSent()
 	if last == nil || !strings.Contains(last.Text, "postponed it until") {
 		t.Fatalf("expected group postpone update, got: %+v", last)
 	}
+}
 
-	// 7. Non-target Alice (101) attempts to complete Bob's reminder -> rejected!
-	uAliceComplete := telegram.Update{
-		UpdateID: 6,
-		CallbackQuery: &telegram.CallbackQuery{
-			ID:   "cb_alice_try",
-			From: telegram.User{ID: 101, FirstName: "Alice"}, // Alice is actor
-			Message: &telegram.Message{
-				MessageID: 100,
-				Chat:      telegram.Chat{ID: 102, Type: "private"},
-			},
-			Data: fmt.Sprintf("re:c:%d", occ.ID),
-		},
-	}
-	if err := env.router.HandleUpdate(ctx, uAliceComplete); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+// listTestReminderCompleteRules: Alice cannot complete Bob's reminder, Bob can, and a stale press is harmless.
+func listTestReminderCompleteRules(ctx context.Context, t *testing.T, env *testEnv, occID int64) {
+	t.Helper()
+	// Non-target Alice (101) attempts to complete Bob's reminder -> rejected!
+	listTestHandle(ctx, t, env, listTestCallback(6, "cb_alice_try", listTestAlice, 102, fmt.Sprintf("re:c:%d", occID)))
 	ans := env.client.LastAnswer()
 	if ans == nil || !strings.Contains(ans.Text, "Only the target member") {
 		t.Fatalf("expected target-only rejection, got: %+v", ans)
 	}
 
-	// 8. Target Bob completes ("re:c:<occ.ID>")
-	uBobComplete := telegram.Update{
-		UpdateID: 7,
-		CallbackQuery: &telegram.CallbackQuery{
-			ID:   "cb_bob_done",
-			From: telegram.User{ID: 102, FirstName: "Bob"},
-			Message: &telegram.Message{
-				MessageID: 100,
-				Chat:      telegram.Chat{ID: 102, Type: "private"},
-			},
-			Data: fmt.Sprintf("re:c:%d", occ.ID),
-		},
-	}
-	if err := env.router.HandleUpdate(ctx, uBobComplete); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	last = env.client.LastSent()
+	// Target Bob completes ("re:c:<occ.ID>")
+	listTestHandle(ctx, t, env, listTestCallback(7, "cb_bob_done", listTestBob, 102, fmt.Sprintf("re:c:%d", occID)))
+	last := env.client.LastSent()
 	if last == nil || !strings.Contains(last.Text, "completed by Bob") {
 		t.Fatalf("expected group completion update, got: %+v", last)
 	}
 
-	// 9. Stale detail view for reminder -> re-renders without error
-	uStale := telegram.Update{
-		UpdateID: 8,
-		CallbackQuery: &telegram.CallbackQuery{
-			ID:   "cb_stale_re",
-			From: telegram.User{ID: 102, FirstName: "Bob"},
-			Message: &telegram.Message{
-				MessageID: 100,
-				Chat:      telegram.Chat{ID: 102, Type: "private"},
-			},
-			Data: fmt.Sprintf("re:c:%d", occ.ID),
-		},
+	// Stale detail view for reminder -> re-renders without error
+	listTestHandle(ctx, t, env, listTestCallback(8, "cb_stale_re", listTestBob, 102, fmt.Sprintf("re:c:%d", occID)))
+}
+
+func TestPrivateList_RemindersNavigationAndActions(t *testing.T) {
+	env, err := setupTestEnv()
+	if err != nil {
+		t.Fatalf("failed to setup test env: %v", err)
 	}
-	if err := env.router.HandleUpdate(ctx, uStale); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+
+	ctx := context.Background()
+
+	occID := listTestReminderOpen(ctx, t, env)
+	listTestReminderDetailAndBack(ctx, t, env, occID)
+	listTestReminderPostpone(ctx, t, env, occID)
+	listTestReminderCompleteRules(ctx, t, env, occID)
 }

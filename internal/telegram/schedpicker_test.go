@@ -85,6 +85,21 @@ func TestRenderers_EnglishAndSpanish(t *testing.T) {
 		t.Fatalf("load location: %v", err)
 	}
 
+	schedpickerTestRecurrenceStep(t, bundle)
+	schedpickerTestIntervalStep(t, bundle)
+
+	// Fixed time: Oct 5, 2026
+	now := time.Date(2026, time.October, 5, 12, 0, 0, 0, loc)
+	schedpickerTestCalendarStep(t, bundle, now, loc)
+	schedpickerTestHourStep(t, bundle, now, loc)
+	schedpickerTestMinuteStep(t, bundle, now, loc)
+	schedpickerTestAnchorStep(t, bundle)
+	schedpickerTestConfirmationStep(t, bundle, now, loc)
+}
+
+// schedpickerTestRecurrenceStep checks the recurrence type step in English and Spanish.
+func schedpickerTestRecurrenceStep(t *testing.T, bundle *i18n.Bundle) {
+	t.Helper()
 	// 1. Recurrence type step
 	textEN, kbEN := telegram.RenderRecurrenceTypeStep(bundle, "en")
 	if !strings.Contains(textEN, "Choose recurrence") {
@@ -101,7 +116,11 @@ func TestRenderers_EnglishAndSpanish(t *testing.T) {
 	if !strings.Contains(textES, "Elige") {
 		t.Errorf("unexpected ES recurrence text: %q", textES)
 	}
+}
 
+// schedpickerTestIntervalStep checks the interval step, its Spanish prompts and recurrence icons.
+func schedpickerTestIntervalStep(t *testing.T, bundle *i18n.Bundle) {
+	t.Helper()
 	// 2. Interval step
 	textIv, kbIv := telegram.RenderIntervalStep(bundle, "en", "weekly")
 	if !strings.Contains(textIv, "🔁 Every how many weeks?") || strings.Contains(textIv, "(s)") {
@@ -133,19 +152,54 @@ func TestRenderers_EnglishAndSpanish(t *testing.T) {
 	if kbIv.InlineKeyboard[3][0].CallbackData != "fl:iv:o" || kbIv.InlineKeyboard[3][0].Text != "✍️ Other" {
 		t.Errorf("unexpected Other button: %+v", kbIv.InlineKeyboard[3][0])
 	}
+}
 
+// schedpickerTestCalendarStep checks the month calendar in English and Spanish, and month navigation.
+func schedpickerTestCalendarStep(t *testing.T, bundle *i18n.Bundle, now time.Time, loc *time.Location) {
+	t.Helper()
 	// 3. Month calendar step
-	// Fixed time: Oct 5, 2026
-	now := time.Date(2026, time.October, 5, 12, 0, 0, 0, loc)
-
 	// English calendar: October 2026
 	calTextEN, calKbEN := telegram.RenderCalendarStep(bundle, "en", 2026, time.October, now, loc)
 	if !strings.Contains(calTextEN, "due date") {
 		t.Errorf("unexpected calendar prompt: %q", calTextEN)
 	}
+	schedpickerTestCalendarNavAndWeekdays(t, calKbEN)
+	schedpickerTestCalendarDayRow1(t, calKbEN)
+	schedpickerTestCalendarDayCount(t, calKbEN)
+	schedpickerTestCalendarShortcuts(t, calKbEN)
 
+	// Spanish calendar: October 2026
+	_, calKbES := telegram.RenderCalendarStep(bundle, "es", 2026, time.October, now, loc)
+	navRowES := calKbES.InlineKeyboard[0]
+	if navRowES[1].Text != "octubre 2026" {
+		t.Errorf("expected Spanish header 'octubre 2026', got %q", navRowES[1].Text)
+	}
+
+	weekdayRowES := calKbES.InlineKeyboard[1]
+	expectedWeekdaysES := []string{"lun", "mar", "mié", "jue", "vie", "sáb", "dom"}
+	for i, w := range expectedWeekdaysES {
+		if weekdayRowES[i].Text != w {
+			t.Errorf("Spanish weekday col %d: got %s, want %s", i, weekdayRowES[i].Text, w)
+		}
+	}
+
+	shortcutsES := calKbES.InlineKeyboard[len(calKbES.InlineKeyboard)-2]
+	if shortcutsES[0].Text != "☀️ Hoy" || shortcutsES[1].Text != "🌅 Mañana" {
+		t.Errorf("expected Hoy and Mañana shortcuts in Spanish, got %s and %s", shortcutsES[0].Text, shortcutsES[1].Text)
+	}
+
+	// Future month calendar: November 2026 allows going back to October 2026
+	_, calKbNov := telegram.RenderCalendarStep(bundle, "en", 2026, time.November, now, loc)
+	if calKbNov.InlineKeyboard[0][0].CallbackData != "fl:cal:2026-10" {
+		t.Errorf("expected prev button in Nov 2026 to have 'fl:cal:2026-10', got %s", calKbNov.InlineKeyboard[0][0].CallbackData)
+	}
+}
+
+// schedpickerTestCalendarNavAndWeekdays checks the nav row and the Monday-first weekday row.
+func schedpickerTestCalendarNavAndWeekdays(t *testing.T, kb *telegram.InlineKeyboardMarkup) {
+	t.Helper()
 	// Row 0 is nav row
-	navRow := calKbEN.InlineKeyboard[0]
+	navRow := kb.InlineKeyboard[0]
 	if len(navRow) != 3 {
 		t.Fatalf("expected 3 buttons in nav row, got %d", len(navRow))
 	}
@@ -163,7 +217,7 @@ func TestRenderers_EnglishAndSpanish(t *testing.T) {
 	}
 
 	// Row 1 is weekday row (Monday first)
-	weekdayRow := calKbEN.InlineKeyboard[1]
+	weekdayRow := kb.InlineKeyboard[1]
 	if len(weekdayRow) != 7 {
 		t.Fatalf("expected 7 columns in weekday row, got %d", len(weekdayRow))
 	}
@@ -173,10 +227,14 @@ func TestRenderers_EnglishAndSpanish(t *testing.T) {
 			t.Errorf("weekday column %d: got %s (%s), want %s", i, weekdayRow[i].Text, weekdayRow[i].CallbackData, w)
 		}
 	}
+}
 
+// schedpickerTestCalendarDayRow1 checks the first day row: padding, then Oct 1 to Oct 4 as past days.
+func schedpickerTestCalendarDayRow1(t *testing.T, kb *telegram.InlineKeyboardMarkup) {
+	t.Helper()
 	// Oct 1 2026 is a Thursday (index 3 in Monday-first order: Mon=0, Tue=1, Wed=2, Thu=3)
 	// Day row 1 (calKbEN.InlineKeyboard[2])
-	dayRow1 := calKbEN.InlineKeyboard[2]
+	dayRow1 := kb.InlineKeyboard[2]
 	if len(dayRow1) != 7 {
 		t.Fatalf("expected 7 columns in day row 1, got %d", len(dayRow1))
 	}
@@ -204,15 +262,19 @@ func TestRenderers_EnglishAndSpanish(t *testing.T) {
 	if dayRow1[6].Text != "4" || dayRow1[6].CallbackData != "fl:noop" { // Oct 4
 		t.Errorf("Oct 4 is past, expected fl:noop, got %+v", dayRow1[6])
 	}
+}
 
+// schedpickerTestCalendarDayCount checks that today is clickable and that October has 31 day buttons.
+func schedpickerTestCalendarDayCount(t *testing.T, kb *telegram.InlineKeyboardMarkup) {
+	t.Helper()
 	// Oct 5 is today, must be clickable: fl:d:2026-10-05
-	dayRow2 := calKbEN.InlineKeyboard[3]
+	dayRow2 := kb.InlineKeyboard[3]
 	if dayRow2[0].Text != "5" || dayRow2[0].CallbackData != "fl:d:2026-10-05" {
 		t.Errorf("Oct 5 is today, expected fl:d:2026-10-05, got %+v", dayRow2[0])
 	}
 
 	// Total day buttons count across day rows
-	dayRows := calKbEN.InlineKeyboard[2 : len(calKbEN.InlineKeyboard)-2]
+	dayRows := kb.InlineKeyboard[2 : len(kb.InlineKeyboard)-2]
 	dayButtonCount := 0
 	for _, row := range dayRows {
 		if len(row) != 7 {
@@ -227,9 +289,13 @@ func TestRenderers_EnglishAndSpanish(t *testing.T) {
 	if dayButtonCount != 31 {
 		t.Errorf("expected 31 day buttons in October 2026, got %d", dayButtonCount)
 	}
+}
 
+// schedpickerTestCalendarShortcuts checks the Today/Tomorrow shortcut row and the type/cancel row.
+func schedpickerTestCalendarShortcuts(t *testing.T, kb *telegram.InlineKeyboardMarkup) {
+	t.Helper()
 	// Shortcut rows
-	shortcuts := calKbEN.InlineKeyboard[len(calKbEN.InlineKeyboard)-2]
+	shortcuts := kb.InlineKeyboard[len(kb.InlineKeyboard)-2]
 	if shortcuts[0].Text != "☀️ Today" || shortcuts[0].CallbackData != "fl:d:today" {
 		t.Errorf("unexpected Today shortcut: %+v", shortcuts[0])
 	}
@@ -237,40 +303,18 @@ func TestRenderers_EnglishAndSpanish(t *testing.T) {
 		t.Errorf("unexpected Tomorrow shortcut: %+v", shortcuts[1])
 	}
 
-	actions := calKbEN.InlineKeyboard[len(calKbEN.InlineKeyboard)-1]
+	actions := kb.InlineKeyboard[len(kb.InlineKeyboard)-1]
 	if actions[0].Text != "⌨️ Type date" || actions[0].CallbackData != "fl:d:type" {
 		t.Errorf("unexpected Type date action: %+v", actions[0])
 	}
 	if actions[1].Text != "❌ Cancel" || actions[1].CallbackData != "fl:c" {
 		t.Errorf("unexpected Cancel action: %+v", actions[1])
 	}
+}
 
-	// Spanish calendar: October 2026
-	_, calKbES := telegram.RenderCalendarStep(bundle, "es", 2026, time.October, now, loc)
-	navRowES := calKbES.InlineKeyboard[0]
-	if navRowES[1].Text != "octubre 2026" {
-		t.Errorf("expected Spanish header 'octubre 2026', got %q", navRowES[1].Text)
-	}
-
-	weekdayRowES := calKbES.InlineKeyboard[1]
-	expectedWeekdaysES := []string{"lun", "mar", "mié", "jue", "vie", "sáb", "dom"}
-	for i, w := range expectedWeekdaysES {
-		if weekdayRowES[i].Text != w {
-			t.Errorf("Spanish weekday col %d: got %s, want %s", i, weekdayRowES[i].Text, w)
-		}
-	}
-
-	shortcutsES := calKbES.InlineKeyboard[len(calKbES.InlineKeyboard)-2]
-	if shortcutsES[0].Text != "☀️ Hoy" || shortcutsES[1].Text != "🌅 Mañana" {
-		t.Errorf("expected Hoy and Mañana shortcuts in Spanish, got %s and %s", shortcutsES[0].Text, shortcutsES[1].Text)
-	}
-
-	// Future month calendar: November 2026 allows going back to October 2026
-	_, calKbNov := telegram.RenderCalendarStep(bundle, "en", 2026, time.November, now, loc)
-	if calKbNov.InlineKeyboard[0][0].CallbackData != "fl:cal:2026-10" {
-		t.Errorf("expected prev button in Nov 2026 to have 'fl:cal:2026-10', got %s", calKbNov.InlineKeyboard[0][0].CallbackData)
-	}
-
+// schedpickerTestHourStep checks the 6x4 hour grid and the 0-23 range.
+func schedpickerTestHourStep(t *testing.T, bundle *i18n.Bundle, now time.Time, loc *time.Location) {
+	t.Helper()
 	// 4. Hour step (6 columns by 4 rows)
 	textH, kbH := telegram.RenderHourStep(bundle, "en", "2026-10-10", now, loc)
 	if !strings.Contains(textH, "Choose hour") {
@@ -298,7 +342,11 @@ func TestRenderers_EnglishAndSpanish(t *testing.T) {
 	if kbH.InlineKeyboard[0][0].Text != "00" || kbH.InlineKeyboard[3][5].Text != "23" {
 		t.Errorf("first hour %s, last hour %s", kbH.InlineKeyboard[0][0].Text, kbH.InlineKeyboard[3][5].Text)
 	}
+}
 
+// schedpickerTestMinuteStep checks the 4x3 minute grid and the Other button.
+func schedpickerTestMinuteStep(t *testing.T, bundle *i18n.Bundle, now time.Time, loc *time.Location) {
+	t.Helper()
 	// 5. Minute step (4 columns by 3 rows + other/cancel row)
 	textM, kbM := telegram.RenderMinuteStep(bundle, "en", "2026-10-10", 10, now, loc)
 	if !strings.Contains(textM, "Choose minute") {
@@ -329,7 +377,11 @@ func TestRenderers_EnglishAndSpanish(t *testing.T) {
 	if kbM.InlineKeyboard[3][0].CallbackData != "fl:mi:o" {
 		t.Errorf("expected Other button with fl:mi:o, got %s", kbM.InlineKeyboard[3][0].CallbackData)
 	}
+}
 
+// schedpickerTestAnchorStep checks the scheduled/completion anchor choice.
+func schedpickerTestAnchorStep(t *testing.T, bundle *i18n.Bundle) {
+	t.Helper()
 	// 6. Anchor step
 	textAnc, kbAnc := telegram.RenderAnchorStep(bundle, "en")
 	if !strings.Contains(textAnc, "anchor") {
@@ -341,7 +393,11 @@ func TestRenderers_EnglishAndSpanish(t *testing.T) {
 	if kbAnc.InlineKeyboard[0][0].CallbackData != "fl:anc:scheduled" || kbAnc.InlineKeyboard[0][1].CallbackData != "fl:anc:completion" {
 		t.Errorf("unexpected anchor callbacks: %+v", kbAnc.InlineKeyboard[0])
 	}
+}
 
+// schedpickerTestConfirmationStep checks the confirmation summary for recurring and one-time items.
+func schedpickerTestConfirmationStep(t *testing.T, bundle *i18n.Bundle, now time.Time, loc *time.Location) {
+	t.Helper()
 	// 7. Confirmation summary step
 	due := time.Date(2026, time.October, 10, 10, 30, 0, 0, loc)
 	sumTextEN, sumKbEN := telegram.RenderConfirmationStep(bundle, "en", telegram.ConfirmationSummary{

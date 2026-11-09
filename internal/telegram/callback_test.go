@@ -7,16 +7,49 @@ import (
 	"github.com/px1/home-ctl/internal/telegram"
 )
 
+// callbackTestCase is one row of the ParseCallbackData table.
+type callbackTestCase struct {
+	name       string
+	data       string
+	actorID    int64
+	wantKind   telegram.CallbackKind
+	wantTarget int64
+	wantPay    string
+	wantErr    bool
+}
+
+func callbackTestAssert(t *testing.T, tt callbackTestCase) {
+	t.Helper()
+	res, err := telegram.ParseCallbackData(tt.data, tt.actorID)
+	if tt.wantErr {
+		if err == nil {
+			t.Fatalf("expected error, got nil")
+		}
+		if !errors.Is(err, telegram.ErrMalformedCallback) {
+			t.Fatalf("expected ErrMalformedCallback, got: %v", err)
+		}
+		return
+	}
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Kind != tt.wantKind {
+		t.Errorf("expected kind %s, got %s", tt.wantKind, res.Kind)
+	}
+	if res.TargetID != tt.wantTarget {
+		t.Errorf("expected target %d, got %d", tt.wantTarget, res.TargetID)
+	}
+	if res.Payload != tt.wantPay {
+		t.Errorf("expected payload %q, got %q", tt.wantPay, res.Payload)
+	}
+	if res.ActorID != tt.actorID {
+		t.Errorf("expected actor %d, got %d", tt.actorID, res.ActorID)
+	}
+}
+
 func TestParseCallbackData(t *testing.T) {
-	tests := []struct {
-		name       string
-		data       string
-		actorID    int64
-		wantKind   telegram.CallbackKind
-		wantTarget int64
-		wantPay    string
-		wantErr    bool
-	}{
+	tests := []callbackTestCase{
 		{"empty", "", 101, "", 0, "", true},
 		{"too long", string(make([]byte, 65)), 101, "", 0, "", true},
 		{"list chores", "list:ch", 101, telegram.CallbackListChores, 0, "", false},
@@ -90,32 +123,7 @@ func TestParseCallbackData(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			res, err := telegram.ParseCallbackData(tt.data, tt.actorID)
-			if tt.wantErr {
-				if err == nil {
-					t.Fatalf("expected error, got nil")
-				}
-				if !errors.Is(err, telegram.ErrMalformedCallback) {
-					t.Fatalf("expected ErrMalformedCallback, got: %v", err)
-				}
-				return
-			}
-
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if res.Kind != tt.wantKind {
-				t.Errorf("expected kind %s, got %s", tt.wantKind, res.Kind)
-			}
-			if res.TargetID != tt.wantTarget {
-				t.Errorf("expected target %d, got %d", tt.wantTarget, res.TargetID)
-			}
-			if res.Payload != tt.wantPay {
-				t.Errorf("expected payload %q, got %q", tt.wantPay, res.Payload)
-			}
-			if res.ActorID != tt.actorID {
-				t.Errorf("expected actor %d, got %d", tt.actorID, res.ActorID)
-			}
+			callbackTestAssert(t, tt)
 		})
 	}
 }

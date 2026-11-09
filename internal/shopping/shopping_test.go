@@ -135,12 +135,8 @@ func (f *fakeShoppingStore) PurchaseEntry(_ context.Context, entryID, purchaserI
 	return e, nil
 }
 
-func TestShoppingService_CatalogAndAdd(t *testing.T) {
-	ctx := context.Background()
-	members := &fakeMemberChecker{allowed: map[int64]bool{1001: true, 1002: true}}
-	store := newFakeShoppingStore()
-	svc := shopping.NewService(store, members)
-
+func shoppingCheckCreateRejections(ctx context.Context, t *testing.T, svc *shopping.Service) *shopping.Item {
+	t.Helper()
 	// Non-member rejected
 	_, err := svc.CreateItem(ctx, 9999, "Eggs", "🥚")
 	if !errors.Is(err, shopping.ErrNotMember) {
@@ -164,15 +160,19 @@ func TestShoppingService_CatalogAndAdd(t *testing.T) {
 	if !errors.Is(err, shopping.ErrItemAlreadyExists) {
 		t.Fatalf("expected ErrItemAlreadyExists for 'eggs', got %v", err)
 	}
+	return item1
+}
 
+func shoppingCheckAddAndPurchase(ctx context.Context, t *testing.T, svc *shopping.Service, itemID int64) []shopping.Entry {
+	t.Helper()
 	// Add item to list
-	entries, err := svc.AddToList(ctx, 1001, []int64{item1.ID})
+	entries, err := svc.AddToList(ctx, 1001, []int64{itemID})
 	if err != nil || len(entries) != 1 {
 		t.Fatalf("AddToList failed: %v", err)
 	}
 
 	// Duplicate pending rejected
-	_, err = svc.AddToList(ctx, 1002, []int64{item1.ID})
+	_, err = svc.AddToList(ctx, 1002, []int64{itemID})
 	if !errors.Is(err, shopping.ErrEntryAlreadyPending) {
 		t.Fatalf("expected ErrEntryAlreadyPending, got %v", err)
 	}
@@ -191,16 +191,23 @@ func TestShoppingService_CatalogAndAdd(t *testing.T) {
 	if !errors.Is(err, shopping.ErrAlreadyPurchased) {
 		t.Fatalf("expected ErrAlreadyPurchased on second tap, got %v", err)
 	}
+	return entries
+}
 
+func shoppingCheckReAdd(ctx context.Context, t *testing.T, svc *shopping.Service, itemID, purchasedEntryID int64) {
+	t.Helper()
 	// Can re-add purchased item
-	readded, err := svc.AddToList(ctx, 1001, []int64{item1.ID})
+	readded, err := svc.AddToList(ctx, 1001, []int64{itemID})
 	if err != nil || len(readded) != 1 {
 		t.Fatalf("failed to re-add purchased item: %v", err)
 	}
-	if readded[0].ID == entries[0].ID {
+	if readded[0].ID == purchasedEntryID {
 		t.Fatalf("expected new entry ID for re-added item")
 	}
+}
 
+func shoppingCheckLists(ctx context.Context, t *testing.T, svc *shopping.Service) {
+	t.Helper()
 	// Exercise ListItems and ListPending
 	all, err := svc.ListItems(ctx)
 	if err != nil || len(all) == 0 {
@@ -210,4 +217,16 @@ func TestShoppingService_CatalogAndAdd(t *testing.T) {
 	if err != nil || len(pending) == 0 {
 		t.Fatalf("ListPending failed: %v", err)
 	}
+}
+
+func TestShoppingService_CatalogAndAdd(t *testing.T) {
+	ctx := context.Background()
+	members := &fakeMemberChecker{allowed: map[int64]bool{1001: true, 1002: true}}
+	store := newFakeShoppingStore()
+	svc := shopping.NewService(store, members)
+
+	item1 := shoppingCheckCreateRejections(ctx, t, svc)
+	entries := shoppingCheckAddAndPurchase(ctx, t, svc, item1.ID)
+	shoppingCheckReAdd(ctx, t, svc, item1.ID, entries[0].ID)
+	shoppingCheckLists(ctx, t, svc)
 }

@@ -96,51 +96,54 @@ notifications:
 	}
 }
 
+func i18nLoadLocaleFlat(t *testing.T, name string) map[string]string {
+	t.Helper()
+	raw, err := fs.ReadFile(os.DirFS(filepath.Join("..", "..", "locales")), name)
+	if err != nil {
+		t.Fatalf("read %s: %v", name, err)
+	}
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal(raw, &parsed); err != nil {
+		t.Fatalf("parse %s: %v", name, err)
+	}
+	flat := map[string]string{}
+	i18nFlatten("", parsed, flat)
+	return flat
+}
+
+func i18nFlatten(prefix string, m map[string]interface{}, flat map[string]string) {
+	for k, v := range m {
+		p := k
+		if prefix != "" {
+			p = prefix + "." + k
+		}
+		switch val := v.(type) {
+		case map[string]interface{}:
+			i18nFlatten(p, val, flat)
+		case string:
+			flat[p] = val
+		}
+	}
+}
+
+func i18nFormatVerbs(s string) string {
+	found := regexp.MustCompile(`%[0-9]*(\[\d+\])?[a-z]`).FindAllString(s, -1)
+	sort.Strings(found) // word order may differ between languages
+	return strings.Join(found, ",")
+}
+
 // Every English key must exist in Spanish with the same format verbs, and vice versa,
 // so a locale never silently falls back to English or crashes on a verb mismatch.
 func TestShippedLocalesAreInSync(t *testing.T) {
-	load := func(name string) map[string]string {
-		raw, err := fs.ReadFile(os.DirFS(filepath.Join("..", "..", "locales")), name)
-		if err != nil {
-			t.Fatalf("read %s: %v", name, err)
-		}
-		var parsed map[string]interface{}
-		if err := yaml.Unmarshal(raw, &parsed); err != nil {
-			t.Fatalf("parse %s: %v", name, err)
-		}
-		flat := map[string]string{}
-		var flatten func(prefix string, m map[string]interface{})
-		flatten = func(prefix string, m map[string]interface{}) {
-			for k, v := range m {
-				p := k
-				if prefix != "" {
-					p = prefix + "." + k
-				}
-				switch val := v.(type) {
-				case map[string]interface{}:
-					flatten(p, val)
-				case string:
-					flat[p] = val
-				}
-			}
-		}
-		flatten("", parsed)
-		return flat
-	}
-	verbs := func(s string) string {
-		found := regexp.MustCompile(`%[0-9]*(\[\d+\])?[a-z]`).FindAllString(s, -1)
-		sort.Strings(found) // word order may differ between languages
-		return strings.Join(found, ",")
-	}
-	en, es := load("en.yaml"), load("es.yaml")
+	en, es := i18nLoadLocaleFlat(t, "en.yaml"), i18nLoadLocaleFlat(t, "es.yaml")
 	for key, text := range en {
 		other, ok := es[key]
 		if !ok {
 			t.Errorf("key %q missing in es.yaml", key)
 			continue
 		}
-		if verbs(text) != verbs(other) {
-			t.Errorf("key %q: format verbs differ (en %q, es %q)", key, verbs(text), verbs(other))
+		if i18nFormatVerbs(text) != i18nFormatVerbs(other) {
+			t.Errorf("key %q: format verbs differ (en %q, es %q)", key, i18nFormatVerbs(text), i18nFormatVerbs(other))
 		}
 	}
 	for key := range es {

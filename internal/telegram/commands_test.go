@@ -32,64 +32,84 @@ func TestRegisterCommands_CommandListsAndScopes(t *testing.T) {
 	for _, call := range fake.setMyCommandsCalls {
 		switch call.Scope.Type {
 		case "chat":
-			if call.Scope.ChatID != chatID {
-				t.Errorf("expected group chat ID %d, got %d", chatID, call.Scope.ChatID)
-			}
-
-			// Group list: add, list, status, help
-			var names []string
-			for _, cmd := range call.Commands {
-				names = append(names, cmd.Command)
-				if cmd.Command == "start" {
-					t.Errorf("group menu must not advertise 'start'")
-				}
-			}
-			expected := []string{"add", "list", "status", "help"}
-			if len(names) != len(expected) {
-				t.Fatalf("expected %d group commands, got %d (%v)", len(expected), len(names), names)
-			}
-			for i, exp := range expected {
-				if names[i] != exp {
-					t.Errorf("expected group command at %d to be %s, got %s", i, exp, names[i])
-				}
-			}
+			commandsTestCheckGroupCall(t, chatID, call)
 		case "all_private_chats":
-			if call.Scope.ChatID != 0 {
-				t.Errorf("expected private chat ID to be 0, got %d", call.Scope.ChatID)
-			}
-
-			// Private list: start, list, status, help
-			var names []string
-			for _, cmd := range call.Commands {
-				names = append(names, cmd.Command)
-				if cmd.Command == "add" {
-					t.Errorf("private menu must not advertise 'add', found %s", cmd.Command)
-				}
-			}
-			expected := []string{"start", "list", "status", "help"}
-			if len(names) != len(expected) {
-				t.Fatalf("expected %d private commands, got %d (%v)", len(expected), len(names), names)
-			}
-			for i, exp := range expected {
-				if names[i] != exp {
-					t.Errorf("expected private command at %d to be %s, got %s", i, exp, names[i])
-				}
-			}
+			commandsTestCheckPrivateCall(t, call)
 		default:
 			t.Fatalf("unexpected scope type: %s", call.Scope.Type)
 		}
 	}
 }
 
-func TestRegisterCommands_LocalizedDescriptionsAndDefaultLocale(t *testing.T) {
-	// Private /list has its own wording; every other command uses telegram.commands.<name>.
-	descKey := func(scope, name string) string {
-		if scope == "all_private_chats" && name == "list" {
-			return "telegram.commands.private_list.description"
-		}
-		return "telegram.commands." + name + ".description"
+// commandsTestCheckGroupCall checks the group-scoped menu: add, list, status, help.
+func commandsTestCheckGroupCall(t *testing.T, chatID int64, call setMyCommandsCall) {
+	t.Helper()
+	if call.Scope.ChatID != chatID {
+		t.Errorf("expected group chat ID %d, got %d", chatID, call.Scope.ChatID)
 	}
 
+	// Group list: add, list, status, help
+	var names []string
+	for _, cmd := range call.Commands {
+		names = append(names, cmd.Command)
+		if cmd.Command == "start" {
+			t.Errorf("group menu must not advertise 'start'")
+		}
+	}
+	commandsTestExpectNames(t, "group", names, []string{"add", "list", "status", "help"})
+}
+
+// commandsTestCheckPrivateCall checks the private-chat menu: start, list, status, help.
+func commandsTestCheckPrivateCall(t *testing.T, call setMyCommandsCall) {
+	t.Helper()
+	if call.Scope.ChatID != 0 {
+		t.Errorf("expected private chat ID to be 0, got %d", call.Scope.ChatID)
+	}
+
+	// Private list: start, list, status, help
+	var names []string
+	for _, cmd := range call.Commands {
+		names = append(names, cmd.Command)
+		if cmd.Command == "add" {
+			t.Errorf("private menu must not advertise 'add', found %s", cmd.Command)
+		}
+	}
+	commandsTestExpectNames(t, "private", names, []string{"start", "list", "status", "help"})
+}
+
+// commandsTestExpectNames compares the command names of one menu with the expected list in order.
+func commandsTestExpectNames(t *testing.T, kind string, names, expected []string) {
+	t.Helper()
+	if len(names) != len(expected) {
+		t.Fatalf("expected %d %s commands, got %d (%v)", len(expected), kind, len(names), names)
+	}
+	for i, exp := range expected {
+		if names[i] != exp {
+			t.Errorf("expected %s command at %d to be %s, got %s", kind, i, exp, names[i])
+		}
+	}
+}
+
+// commandsTestDescKey returns the locale key of a command's description. Private /list has its own wording.
+func commandsTestDescKey(scope, name string) string {
+	if scope == "all_private_chats" && name == "list" {
+		return "telegram.commands.private_list.description"
+	}
+	return "telegram.commands." + name + ".description"
+}
+
+// commandsTestCheckDescriptions compares each command description in call with the wording of lang in bundle.
+func commandsTestCheckDescriptions(t *testing.T, label string, bundle *i18n.Bundle, lang string, call setMyCommandsCall) {
+	t.Helper()
+	for _, cmd := range call.Commands {
+		want := bundle.T(lang, commandsTestDescKey(call.Scope.Type, cmd.Command))
+		if cmd.Description != want {
+			t.Errorf("%s description mismatch for %s: got %q, want %q", label, cmd.Command, cmd.Description, want)
+		}
+	}
+}
+
+func TestRegisterCommands_LocalizedDescriptionsAndDefaultLocale(t *testing.T) {
 	localesDir := filepath.Join("..", "..", "locales")
 	bundleEN, err := i18n.NewBundle(localesDir, "en", i18n.DefaultRequiredKeys, nil)
 	if err != nil {
@@ -108,27 +128,12 @@ func TestRegisterCommands_LocalizedDescriptionsAndDefaultLocale(t *testing.T) {
 		for _, call := range fake.setMyCommandsCalls {
 			switch call.LanguageCode {
 			case "en":
-				for _, cmd := range call.Commands {
-					want := bundleEN.T("en", descKey(call.Scope.Type, cmd.Command))
-					if cmd.Description != want {
-						t.Errorf("en description mismatch for %s: got %q, want %q", cmd.Command, cmd.Description, want)
-					}
-				}
+				commandsTestCheckDescriptions(t, "en", bundleEN, "en", call)
 			case "es":
-				for _, cmd := range call.Commands {
-					want := bundleEN.T("es", descKey(call.Scope.Type, cmd.Command))
-					if cmd.Description != want {
-						t.Errorf("es description mismatch for %s: got %q, want %q", cmd.Command, cmd.Description, want)
-					}
-				}
+				commandsTestCheckDescriptions(t, "es", bundleEN, "es", call)
 			case "":
 				// Fallback must use default locale (en)
-				for _, cmd := range call.Commands {
-					want := bundleEN.T("en", descKey(call.Scope.Type, cmd.Command))
-					if cmd.Description != want {
-						t.Errorf("fallback description mismatch for %s: got %q, want %q", cmd.Command, cmd.Description, want)
-					}
-				}
+				commandsTestCheckDescriptions(t, "fallback", bundleEN, "en", call)
 			default:
 				t.Errorf("unexpected language code: %q", call.LanguageCode)
 			}
@@ -144,12 +149,7 @@ func TestRegisterCommands_LocalizedDescriptionsAndDefaultLocale(t *testing.T) {
 		for _, call := range fake.setMyCommandsCalls {
 			if call.LanguageCode == "" {
 				foundFallback = true
-				for _, cmd := range call.Commands {
-					want := bundleES.T("es", descKey(call.Scope.Type, cmd.Command))
-					if cmd.Description != want {
-						t.Errorf("es fallback description mismatch for %s: got %q, want %q", cmd.Command, cmd.Description, want)
-					}
-				}
+				commandsTestCheckDescriptions(t, "es fallback", bundleES, "es", call)
 			}
 		}
 		if !foundFallback {

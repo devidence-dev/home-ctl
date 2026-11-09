@@ -115,16 +115,8 @@ type Bundle struct {
 	logger        *slog.Logger
 }
 
-// NewBundle loads all YAML locale files from localesDir, validates required keys against en.yaml,
-// and ensures the default locale exists.
-func NewBundle(localesDir, defaultLocale string, requiredKeys []string, logger *slog.Logger) (*Bundle, error) {
-	if logger == nil {
-		logger = slog.Default()
-	}
-	if defaultLocale == "" {
-		defaultLocale = "en"
-	}
-
+// loadLocales reads every *.yaml file in localesDir into flattened key maps keyed by locale name.
+func loadLocales(localesDir string) (map[string]map[string]string, error) {
 	entries, err := os.ReadDir(localesDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read locales directory %s: %w", localesDir, err)
@@ -151,6 +143,23 @@ func NewBundle(localesDir, defaultLocale string, requiredKeys []string, logger *
 		flat := make(map[string]string)
 		flattenMap("", raw, flat)
 		locales[localeName] = flat
+	}
+	return locales, nil
+}
+
+// NewBundle loads all YAML locale files from localesDir, validates required keys against en.yaml,
+// and ensures the default locale exists.
+func NewBundle(localesDir, defaultLocale string, requiredKeys []string, logger *slog.Logger) (*Bundle, error) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	if defaultLocale == "" {
+		defaultLocale = "en"
+	}
+
+	locales, err := loadLocales(localesDir)
+	if err != nil {
+		return nil, err
 	}
 
 	enMap, ok := locales["en"]

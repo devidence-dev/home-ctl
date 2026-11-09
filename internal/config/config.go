@@ -304,19 +304,32 @@ func checkDisallowedKeys(node *yaml.Node, filePath string) error {
 			}
 		}
 	case yaml.MappingNode:
-		for i := 0; i < len(node.Content); i += 2 {
-			keyNode := node.Content[i]
-			key := strings.ToLower(keyNode.Value)
-			if strings.Contains(key, "token") || key == "secret" || key == "password" {
-				return fmt.Errorf("forbidden secret key %q in %s: secrets must come from the environment", keyNode.Value, filePath)
-			}
-			if key == "timezone" || key == "app_timezone" {
-				return fmt.Errorf("forbidden timezone key %q in %s: timezone must come from APP_TIMEZONE environment variable", keyNode.Value, filePath)
-			}
-			if err := checkDisallowedKeys(node.Content[i+1], filePath); err != nil {
-				return err
-			}
+		return checkMappingKeys(node, filePath)
+	}
+	return nil
+}
+
+// checkMappingKeys checks each key and recurses into each value of a mapping node.
+func checkMappingKeys(node *yaml.Node, filePath string) error {
+	for i := 0; i < len(node.Content); i += 2 {
+		if err := checkDisallowedKey(node.Content[i], filePath); err != nil {
+			return err
 		}
+		if err := checkDisallowedKeys(node.Content[i+1], filePath); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkDisallowedKey rejects secret-like and timezone keys.
+func checkDisallowedKey(keyNode *yaml.Node, filePath string) error {
+	key := strings.ToLower(keyNode.Value)
+	if strings.Contains(key, "token") || key == "secret" || key == "password" {
+		return fmt.Errorf("forbidden secret key %q in %s: secrets must come from the environment", keyNode.Value, filePath)
+	}
+	if key == "timezone" || key == "app_timezone" {
+		return fmt.Errorf("forbidden timezone key %q in %s: timezone must come from APP_TIMEZONE environment variable", keyNode.Value, filePath)
 	}
 	return nil
 }

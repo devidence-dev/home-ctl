@@ -17,6 +17,17 @@ func TestShoppingFlows_AndList(t *testing.T) {
 		t.Fatalf("failed to setup test env: %v", err)
 	}
 
+	shoppingTestCreateEggs(t, env)
+	shoppingTestDuplicateEggsRejected(t, env)
+	shoppingTestSelectEggs(t, env)
+	shoppingTestListShowsEggs(t, env)
+	shoppingTestBuyEggs(t, env)
+	shoppingTestListEmpty(t, env)
+}
+
+// shoppingTestCreateEggs covers steps 1-3: /add with an empty catalog prompts for a name, then an emoji, then creates the item.
+func shoppingTestCreateEggs(t *testing.T, env *testEnv) {
+	t.Helper()
 	ctx := context.Background()
 
 	// 1. /add in Shopping topic with empty catalog -> prompts for new item name
@@ -81,6 +92,12 @@ func TestShoppingFlows_AndList(t *testing.T) {
 	if err != nil || len(items) != 1 || items[0].Name != "Eggs" {
 		t.Fatalf("item was not created in catalog: %+v", items)
 	}
+}
+
+// shoppingTestDuplicateEggsRejected covers step 4: Bob's "eggs" duplicate is rejected.
+func shoppingTestDuplicateEggsRejected(t *testing.T, env *testEnv) {
+	t.Helper()
+	ctx := context.Background()
 
 	// 4. Duplicate name rejected: Bob tries to create "eggs"
 	uAdd2 := telegram.Update{
@@ -135,10 +152,16 @@ func TestShoppingFlows_AndList(t *testing.T) {
 		},
 	}
 	_ = env.router.HandleUpdate(ctx, uBobEmoji)
-	last = env.client.LastSent()
+	last := env.client.LastSent()
 	if last == nil || !strings.Contains(last.Text, "already exists") {
 		t.Fatalf("expected duplicate item error, got: %+v", last)
 	}
+}
+
+// shoppingTestSelectEggs covers step 5: Alice selects Eggs from her /add menu into the pending list.
+func shoppingTestSelectEggs(t *testing.T, env *testEnv) {
+	t.Helper()
+	ctx := context.Background()
 
 	// 5. Select Eggs to add to pending list
 	uAdd3 := telegram.Update{
@@ -169,10 +192,16 @@ func TestShoppingFlows_AndList(t *testing.T) {
 		},
 	}
 	_ = env.router.HandleUpdate(ctx, uSelect)
-	last = env.client.LastSent()
+	last := env.client.LastSent()
 	if last == nil || !strings.Contains(last.Text, "Added to the shopping list: 🥚 Eggs") {
 		t.Fatalf("expected item added notice, got: %+v", last)
 	}
+}
+
+// shoppingTestListShowsEggs covers step 6: /list in the Shopping topic renders the pending Eggs button.
+func shoppingTestListShowsEggs(t *testing.T, env *testEnv) {
+	t.Helper()
+	ctx := context.Background()
 
 	// 6. /list in Shopping topic -> renders pending Eggs
 	uList := telegram.Update{
@@ -188,7 +217,7 @@ func TestShoppingFlows_AndList(t *testing.T) {
 	if err := env.router.HandleUpdate(ctx, uList); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	last = env.client.LastSent()
+	last := env.client.LastSent()
 	if last == nil || last.Markup == nil || len(last.Markup.InlineKeyboard) == 0 {
 		t.Fatalf("expected list buttons, got: %+v", last)
 	}
@@ -196,6 +225,12 @@ func TestShoppingFlows_AndList(t *testing.T) {
 	if btn.Text != "🥚 Eggs" || btn.CallbackData != "sh:p:1" {
 		t.Fatalf("unexpected button: %+v", btn)
 	}
+}
+
+// shoppingTestBuyEggs covers steps 7-8: Bob buys Eggs, then a second tap is answered as already purchased.
+func shoppingTestBuyEggs(t *testing.T, env *testEnv) {
+	t.Helper()
+	ctx := context.Background()
 
 	// 7. Bob purchases Eggs (tap button)
 	uPurchase := telegram.Update{
@@ -214,7 +249,7 @@ func TestShoppingFlows_AndList(t *testing.T) {
 	if err := env.router.HandleUpdate(ctx, uPurchase); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	last = env.client.LastSent()
+	last := env.client.LastSent()
 	if last == nil || !strings.Contains(last.Text, "purchased by Bob") {
 		t.Fatalf("expected group purchase update, got: %+v", last)
 	}
@@ -238,6 +273,12 @@ func TestShoppingFlows_AndList(t *testing.T) {
 	if ans == nil || !strings.Contains(ans.Text, "already purchased") {
 		t.Fatalf("expected already purchased notice, got: %+v", ans)
 	}
+}
+
+// shoppingTestListEmpty covers step 9: the Shopping /list is empty once Eggs is purchased.
+func shoppingTestListEmpty(t *testing.T, env *testEnv) {
+	t.Helper()
+	ctx := context.Background()
 
 	// 9. Shopping /list is now empty
 	uListEmpty := telegram.Update{
@@ -251,7 +292,7 @@ func TestShoppingFlows_AndList(t *testing.T) {
 		},
 	}
 	_ = env.router.HandleUpdate(ctx, uListEmpty)
-	last = env.client.LastSent()
+	last := env.client.LastSent()
 	if last == nil || !strings.Contains(last.Text, "empty") {
 		t.Fatalf("expected empty list notice, got: %+v", last)
 	}
@@ -333,6 +374,16 @@ func TestShoppingFlow_KeyboardsClosedOnItemPick_Cancel_AndExpired(t *testing.T) 
 		t.Fatalf("CreateItem failed: %v", err)
 	}
 
+	shoppingTestPickClosesMenu(t, env, milk.ID)
+	shoppingTestCancelClosesMenu(t, env)
+	shoppingTestExpiredPressClosesMenu(t, env, bread.ID)
+}
+
+// shoppingTestPickClosesMenu covers step 1: picking an item closes the menu keyboard and keeps its text.
+func shoppingTestPickClosesMenu(t *testing.T, env *testEnv, milkID int64) {
+	t.Helper()
+	ctx := context.Background()
+
 	// 1. Item pick closes menu keyboard
 	uAdd1 := telegram.Update{
 		UpdateID: 1,
@@ -363,7 +414,7 @@ func TestShoppingFlow_KeyboardsClosedOnItemPick_Cancel_AndExpired(t *testing.T) 
 				Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
 				Text:            menu1.Text,
 			},
-			Data: fmt.Sprintf("fl:sel:%d", milk.ID),
+			Data: fmt.Sprintf("fl:sel:%d", milkID),
 		},
 	}
 	if err := env.router.HandleUpdate(ctx, uPick); err != nil {
@@ -379,6 +430,12 @@ func TestShoppingFlow_KeyboardsClosedOnItemPick_Cancel_AndExpired(t *testing.T) 
 	if lastEdited.Text != menu1.Text {
 		t.Fatalf("expected menu text %q preserved, got: %q", menu1.Text, lastEdited.Text)
 	}
+}
+
+// shoppingTestCancelClosesMenu covers step 2: cancel closes the menu keyboard and answers "Cancelled".
+func shoppingTestCancelClosesMenu(t *testing.T, env *testEnv) {
+	t.Helper()
+	ctx := context.Background()
 
 	// 2. Cancel closes menu keyboard
 	uAdd2 := telegram.Update{
@@ -413,7 +470,7 @@ func TestShoppingFlow_KeyboardsClosedOnItemPick_Cancel_AndExpired(t *testing.T) 
 	if err := env.router.HandleUpdate(ctx, uCancel); err != nil {
 		t.Fatalf("unexpected error on cancel: %v", err)
 	}
-	lastEdited = env.client.LastEdited()
+	lastEdited := env.client.LastEdited()
 	if lastEdited == nil || lastEdited.MessageID != menu2.MessageID {
 		t.Fatalf("expected menu message %d to be edited on cancel, got: %+v", menu2.MessageID, lastEdited)
 	}
@@ -424,6 +481,12 @@ func TestShoppingFlow_KeyboardsClosedOnItemPick_Cancel_AndExpired(t *testing.T) 
 	if ans == nil || !strings.Contains(ans.Text, "Cancelled") {
 		t.Fatalf("expected cancelled callback answer, got: %+v", ans)
 	}
+}
+
+// shoppingTestExpiredPressClosesMenu covers step 3: a press after the flow TTL gets an expired alert and closes the menu keyboard.
+func shoppingTestExpiredPressClosesMenu(t *testing.T, env *testEnv, breadID int64) {
+	t.Helper()
+	ctx := context.Background()
 
 	// 3. Expired press leaves menu message edited with an empty keyboard
 	uAdd3 := telegram.Update{
@@ -455,20 +518,20 @@ func TestShoppingFlow_KeyboardsClosedOnItemPick_Cancel_AndExpired(t *testing.T) 
 				Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
 				Text:            menu3.Text,
 			},
-			Data: fmt.Sprintf("fl:sel:%d", bread.ID),
+			Data: fmt.Sprintf("fl:sel:%d", breadID),
 		},
 	}
 	if err := env.router.HandleUpdate(ctx, uExpired); err != nil {
 		t.Fatalf("unexpected error on expired tap: %v", err)
 	}
-	lastEdited = env.client.LastEdited()
+	lastEdited := env.client.LastEdited()
 	if lastEdited == nil || lastEdited.MessageID != menu3.MessageID {
 		t.Fatalf("expected menu message %d to be edited on expiry, got: %+v", menu3.MessageID, lastEdited)
 	}
 	if lastEdited.Markup == nil || len(lastEdited.Markup.InlineKeyboard) != 0 {
 		t.Fatalf("expected empty keyboard after expiry, got: %+v", lastEdited.Markup)
 	}
-	ans = env.client.LastAnswer()
+	ans := env.client.LastAnswer()
 	if ans == nil || !ans.Alert || !strings.Contains(ans.Text, "expired") {
 		t.Fatalf("expected expired alert, got: %+v", ans)
 	}
@@ -494,6 +557,15 @@ func TestShoppingFlow_RejectedPressLeavesKeyboard_AndListPurchaseKeepsRemainingB
 	if _, err := env.shopping.AddToList(ctx, 101, []int64{milk.ID}); err != nil {
 		t.Fatalf("AddToList failed: %v", err)
 	}
+
+	shoppingTestRejectedPressKeepsFlow(t, env, milk.ID)
+	shoppingTestPurchaseKeepsBreadButton(t, env, milk.ID, bread.ID)
+}
+
+// shoppingTestRejectedPressKeepsFlow covers step 1: a press on an already pending item neither edits the message nor clears the flow.
+func shoppingTestRejectedPressKeepsFlow(t *testing.T, env *testEnv, milkID int64) {
+	t.Helper()
+	ctx := context.Background()
 
 	// 1. Rejected press: item already pending neither edits the message nor clears the flow
 	uAdd := telegram.Update{
@@ -523,7 +595,7 @@ func TestShoppingFlow_RejectedPressLeavesKeyboard_AndListPurchaseKeepsRemainingB
 				Chat:            telegram.Chat{ID: -1001234567890, Type: "supergroup"},
 				Text:            menu.Text,
 			},
-			Data: fmt.Sprintf("fl:sel:%d", milk.ID),
+			Data: fmt.Sprintf("fl:sel:%d", milkID),
 		},
 	}
 	if err := env.router.HandleUpdate(ctx, uTapDuplicate); err != nil {
@@ -543,9 +615,15 @@ func TestShoppingFlow_RejectedPressLeavesKeyboard_AndListPurchaseKeepsRemainingB
 	if err != nil || state == nil || state.Step != "shopping_select_items" {
 		t.Fatalf("expected flow to remain in shopping_select_items, got: %+v err: %v", state, err)
 	}
+}
+
+// shoppingTestPurchaseKeepsBreadButton covers step 2: Bob buys Milk from /list and the refreshed list keeps the Bread button.
+func shoppingTestPurchaseKeepsBreadButton(t *testing.T, env *testEnv, milkItemID, breadID int64) {
+	t.Helper()
+	ctx := context.Background()
 
 	// 2. Add Bread so list has 2 items, then purchase Milk and verify remaining button for Bread stays
-	if _, err := env.shopping.AddToList(ctx, 101, []int64{bread.ID}); err != nil {
+	if _, err := env.shopping.AddToList(ctx, 101, []int64{breadID}); err != nil {
 		t.Fatalf("AddToList failed: %v", err)
 	}
 
@@ -567,16 +645,7 @@ func TestShoppingFlow_RejectedPressLeavesKeyboard_AndListPurchaseKeepsRemainingB
 		t.Fatalf("expected list message with 2 items, got: %+v", listMsg)
 	}
 
-	pending, err := env.shopping.ListPending(ctx)
-	if err != nil || len(pending) != 2 {
-		t.Fatalf("expected 2 pending entries, got: %+v", pending)
-	}
-	var milkEntryID int64
-	for _, entry := range pending {
-		if entry.Item.ID == milk.ID {
-			milkEntryID = entry.ID
-		}
-	}
+	milkEntryID := shoppingTestPendingEntryID(t, env, milkItemID)
 
 	// Bob purchases Milk
 	uPurchase := telegram.Update{
@@ -606,6 +675,23 @@ func TestShoppingFlow_RejectedPressLeavesKeyboard_AndListPurchaseKeepsRemainingB
 	if lastEdited.Markup.InlineKeyboard[0][0].Text != "🍞 Bread" {
 		t.Fatalf("expected Bread button to remain, got: %s", lastEdited.Markup.InlineKeyboard[0][0].Text)
 	}
+}
+
+// shoppingTestPendingEntryID returns the pending entry ID of itemID, after checking the list holds exactly two entries.
+func shoppingTestPendingEntryID(t *testing.T, env *testEnv, itemID int64) int64 {
+	t.Helper()
+	ctx := context.Background()
+	pending, err := env.shopping.ListPending(ctx)
+	if err != nil || len(pending) != 2 {
+		t.Fatalf("expected 2 pending entries, got: %+v", pending)
+	}
+	var entryID int64
+	for _, entry := range pending {
+		if entry.Item.ID == itemID {
+			entryID = entry.ID
+		}
+	}
+	return entryID
 }
 
 func TestShoppingAdd_StoresMessageID(t *testing.T) {

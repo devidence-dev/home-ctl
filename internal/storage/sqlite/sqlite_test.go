@@ -65,6 +65,26 @@ func TestMigrations_Constraints(t *testing.T) {
 
 	now := time.Now().UTC().Format(time.RFC3339)
 
+	sqliteTestConstraintsUsersAndShopping(t, db, now)
+	sqliteTestConstraintsChores(t, db, now)
+	sqliteTestConstraintsReminders(t, db, now)
+
+	// 11. Flow state unique (user_id, chat_id, thread_id)
+	_, err := db.Exec(`INSERT INTO flow_state (user_id, chat_id, thread_id, step, payload, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		1001, -100, 42, "step1", "{}", now, now, now)
+	if err != nil {
+		t.Fatalf("failed to insert flow_state: %v", err)
+	}
+	_, err = db.Exec(`INSERT INTO flow_state (user_id, chat_id, thread_id, step, payload, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		1001, -100, 42, "step2", "{}", now, now, now)
+	if err == nil {
+		t.Fatalf("expected duplicate flow_state key failure, got nil")
+	}
+}
+
+// sqliteTestConstraintsUsersAndShopping covers steps 1-3 of TestMigrations_Constraints.
+func sqliteTestConstraintsUsersAndShopping(t *testing.T, db *sql.DB, now string) {
+	t.Helper()
 	// 1. Insert valid user
 	_, err := db.Exec(`INSERT INTO users (id, name, username, locale, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		1001, "Alice", "alice", "en", 1, now, now)
@@ -109,9 +129,13 @@ func TestMigrations_Constraints(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected unique index violation for duplicate pending shopping entry, got nil")
 	}
+}
 
+// sqliteTestConstraintsChores covers steps 4-7 of TestMigrations_Constraints.
+func sqliteTestConstraintsChores(t *testing.T, db *sql.DB, now string) {
+	t.Helper()
 	// 4. Chore definitions: blank name rejected
-	_, err = db.Exec(`INSERT INTO chore_definitions (name, emoji, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
+	_, err := db.Exec(`INSERT INTO chore_definitions (name, emoji, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
 		"   ", "🧹", 1001, now, now)
 	if err == nil {
 		t.Fatalf("expected CHECK constraint failure for blank chore name, got nil")
@@ -160,9 +184,13 @@ func TestMigrations_Constraints(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected duplicate update_id failure, got nil")
 	}
+}
 
+// sqliteTestConstraintsReminders covers steps 8-10 of TestMigrations_Constraints.
+func sqliteTestConstraintsReminders(t *testing.T, db *sql.DB, now string) {
+	t.Helper()
 	// 8. Reminder definitions & occurrences constraints
-	_, err = db.Exec(`INSERT INTO reminder_definitions (title, emoji, target_user_id, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+	_, err := db.Exec(`INSERT INTO reminder_definitions (title, emoji, target_user_id, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
 		"  ", "⏰", 1001, 1001, now, now)
 	if err == nil {
 		t.Fatalf("expected blank reminder title failure, got nil")
@@ -198,18 +226,6 @@ func TestMigrations_Constraints(t *testing.T) {
 		"chore", 1, 1001, now, now, "invalid_outcome", now)
 	if err == nil {
 		t.Fatalf("expected invalid outcome failure on notification_attempts, got nil")
-	}
-
-	// 11. Flow state unique (user_id, chat_id, thread_id)
-	_, err = db.Exec(`INSERT INTO flow_state (user_id, chat_id, thread_id, step, payload, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		1001, -100, 42, "step1", "{}", now, now, now)
-	if err != nil {
-		t.Fatalf("failed to insert flow_state: %v", err)
-	}
-	_, err = db.Exec(`INSERT INTO flow_state (user_id, chat_id, thread_id, step, payload, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		1001, -100, 42, "step2", "{}", now, now, now)
-	if err == nil {
-		t.Fatalf("expected duplicate flow_state key failure, got nil")
 	}
 }
 

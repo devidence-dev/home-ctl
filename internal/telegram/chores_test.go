@@ -37,16 +37,9 @@ func pressChoreCallback(ctx context.Context, env *testEnv, updateID int64, userI
 	})
 }
 
-// 5.1 & 5.2: One-time chore flow skips interval and anchor, creates exactly 1 occurrence
-// with scheduled_at == due_at, editing the same message ID throughout.
-func TestChoresFlow_OneTime(t *testing.T) {
-	env, err := setupTestEnv()
-	if err != nil {
-		t.Fatalf("failed to setup test env: %v", err)
-	}
-	ctx := context.Background()
-
-	// 1. /add in Chores topic
+// choresFlowStart runs /add in the Chores topic and checks the name prompt. Returns its message ID.
+func choresFlowStart(ctx context.Context, t *testing.T, env *testEnv) int64 {
+	t.Helper()
 	uAdd := telegram.Update{
 		UpdateID: 1,
 		Message: &telegram.Message{
@@ -64,9 +57,12 @@ func TestChoresFlow_OneTime(t *testing.T) {
 	if initialMsg == nil || !strings.Contains(initialMsg.Text, "name for the new chore") {
 		t.Fatalf("expected chore name prompt, got: %+v", initialMsg)
 	}
-	flowMsgID := initialMsg.MessageID
+	return initialMsg.MessageID
+}
 
-	// 2. Alice types chore name
+// choresFlowName types the chore name, which re-anchors the flow to a new emoji prompt. Returns the new flow message ID.
+func choresFlowName(ctx context.Context, t *testing.T, env *testEnv, namePromptID int64) int64 {
+	t.Helper()
 	uName := telegram.Update{
 		UpdateID: 2,
 		Message: &telegram.Message{
@@ -82,76 +78,42 @@ func TestChoresFlow_OneTime(t *testing.T) {
 	}
 	// A typed answer re-anchors: the emoji step is a new message below the text and the name prompt is deleted.
 	lastSent := env.client.LastSent()
-	if lastSent == nil || lastSent.MessageID == flowMsgID || !strings.Contains(lastSent.Text, "Choose an emoji") {
+	if lastSent == nil || lastSent.MessageID == namePromptID || !strings.Contains(lastSent.Text, "Choose an emoji") {
 		t.Fatalf("expected emoji prompt as a new message after the typed name, got: %+v", lastSent)
 	}
-	if deleted := env.client.DeletedMessages(); len(deleted) != 1 || deleted[0] != flowMsgID {
-		t.Fatalf("expected name prompt %d deleted, got %v", flowMsgID, deleted)
+	if deleted := env.client.DeletedMessages(); len(deleted) != 1 || deleted[0] != namePromptID {
+		t.Fatalf("expected name prompt %d deleted, got %v", namePromptID, deleted)
 	}
-	flowMsgID = lastSent.MessageID // the active flow message from here on
+	return lastSent.MessageID // the active flow message from here on
+}
 
-	// 2b. Skip the emoji: the assignee step edits the same message
-	if err := pressChoreCallback(ctx, env, 4, 101, "fl:em:skip"); err != nil {
-		t.Fatalf("emoji skip failed: %v", err)
-	}
-	if lastEdit := env.client.LastEdited(); lastEdit == nil || lastEdit.MessageID != flowMsgID || !strings.Contains(lastEdit.Text, "Clean kitchen") {
-		t.Fatalf("expected assignee prompt on message %d, got: %+v", flowMsgID, lastEdit)
-	}
-
-	// 3. Assign to Alice (101) -> moves to recurrence type step
-	if err := pressChoreCallback(ctx, env, 3, 101, "fl:usr:101"); err != nil {
-		t.Fatalf("assign callback failed: %v", err)
+// choresFlowPressExpect presses one flow button and checks the flow message now shows the wanted prompt.
+func choresFlowPressExpect(ctx context.Context, t *testing.T, env *testEnv, flowMsgID, updateID int64, data, want, prompt string) {
+	t.Helper()
+	if err := pressChoreCallback(ctx, env, updateID, 101, data); err != nil {
+		t.Fatalf("%s failed: %v", data, err)
 	}
 	lastEdit := env.client.LastEdited()
-	if lastEdit == nil || lastEdit.MessageID != flowMsgID || !strings.Contains(lastEdit.Text, "recurrence type") {
-		t.Fatalf("expected recurrence type prompt on message %d, got: %+v", flowMsgID, lastEdit)
+	if lastEdit == nil || lastEdit.MessageID != flowMsgID || !strings.Contains(lastEdit.Text, want) {
+		t.Fatalf("expected %s prompt on message %d, got: %+v", prompt, flowMsgID, lastEdit)
 	}
+}
 
-	// 4. Alice picks One time (fl:rt:once) -> skips interval, moves to calendar date step
-	if err := pressChoreCallback(ctx, env, 4, 101, "fl:rt:once"); err != nil {
-		t.Fatalf("recurrence type callback failed: %v", err)
-	}
-	lastEdit = env.client.LastEdited()
-	if lastEdit == nil || lastEdit.MessageID != flowMsgID || !strings.Contains(lastEdit.Text, "first due date") {
-		t.Fatalf("expected calendar date prompt on message %d, got: %+v", flowMsgID, lastEdit)
-	}
-
-	// 5. Alice picks date Oct 14 2026 (fl:d:2026-10-14) -> moves to hour step
-	if err := pressChoreCallback(ctx, env, 5, 101, "fl:d:2026-10-14"); err != nil {
-		t.Fatalf("date callback failed: %v", err)
-	}
-	lastEdit = env.client.LastEdited()
-	if lastEdit == nil || lastEdit.MessageID != flowMsgID || !strings.Contains(lastEdit.Text, "hour") {
-		t.Fatalf("expected hour prompt on message %d, got: %+v", flowMsgID, lastEdit)
-	}
-
-	// 6. Alice picks hour 10 (fl:h:10) -> moves to minute step
-	if err := pressChoreCallback(ctx, env, 6, 101, "fl:h:10"); err != nil {
-		t.Fatalf("hour callback failed: %v", err)
-	}
-	lastEdit = env.client.LastEdited()
-	if lastEdit == nil || lastEdit.MessageID != flowMsgID || !strings.Contains(lastEdit.Text, "minute") {
-		t.Fatalf("expected minute prompt on message %d, got: %+v", flowMsgID, lastEdit)
-	}
-
-	// 7. Alice picks minute 30 (fl:mi:30) -> skips anchor, moves directly to confirm step
-	if err := pressChoreCallback(ctx, env, 7, 101, "fl:mi:30"); err != nil {
-		t.Fatalf("minute callback failed: %v", err)
-	}
-	lastEdit = env.client.LastEdited()
-	if lastEdit == nil || lastEdit.MessageID != flowMsgID || !strings.Contains(lastEdit.Text, "Confirm") {
-		t.Fatalf("expected confirm prompt on message %d, got: %+v", flowMsgID, lastEdit)
-	}
-
-	// 8. Confirm (fl:ok) -> closes keyboard, creates occurrence
+// choresFlowConfirm presses confirm and checks the flow message lost its keyboard.
+func choresFlowConfirm(ctx context.Context, t *testing.T, env *testEnv, flowMsgID int64) {
+	t.Helper()
 	if err := pressChoreCallback(ctx, env, 8, 101, "fl:ok"); err != nil {
 		t.Fatalf("confirm callback failed: %v", err)
 	}
-	lastEdit = env.client.LastEdited()
+	lastEdit := env.client.LastEdited()
 	if lastEdit == nil || lastEdit.MessageID != flowMsgID || len(lastEdit.Markup.InlineKeyboard) != 0 {
 		t.Fatalf("expected closed keyboard on message %d after confirm, got: %+v", flowMsgID, lastEdit)
 	}
+}
 
+// choresFlowVerifyMessages checks that the flow used exactly two messages and edited only the flow message.
+func choresFlowVerifyMessages(t *testing.T, env *testEnv, flowMsgID int64) {
+	t.Helper()
 	// Two messages: the initial prompt, then the step re-anchored below the typed answer; button steps edit that one
 	if len(env.client.SentMessages()) != 2 {
 		t.Fatalf("expected 2 messages sent, got %d", len(env.client.SentMessages()))
@@ -162,7 +124,11 @@ func TestChoresFlow_OneTime(t *testing.T) {
 			t.Fatalf("expected edit to message %d, got %d", flowMsgID, em.MessageID)
 		}
 	}
+}
 
+// choresFlowVerifyStored checks the one-time occurrence stored for Alice.
+func choresFlowVerifyStored(ctx context.Context, t *testing.T, env *testEnv) {
+	t.Helper()
 	// Verify occurrence in database: scheduled_at == due_at == Oct 14 2026 10:30 local
 	res, err := env.chores.ListMyOpen(ctx, 101)
 	if err != nil || len(res.Occurrences) != 1 {
@@ -179,6 +145,37 @@ func TestChoresFlow_OneTime(t *testing.T) {
 	if occ.Definition.RecurrenceInterval != nil {
 		t.Fatalf("expected nil recurrence for one-time chore, got %+v", occ.Definition.RecurrenceInterval)
 	}
+}
+
+// 5.1 & 5.2: One-time chore flow skips interval and anchor, creates exactly 1 occurrence
+// with scheduled_at == due_at, editing the same message ID throughout.
+func TestChoresFlow_OneTime(t *testing.T) {
+	env, err := setupTestEnv()
+	if err != nil {
+		t.Fatalf("failed to setup test env: %v", err)
+	}
+	ctx := context.Background()
+
+	flowMsgID := choresFlowStart(ctx, t, env)
+	flowMsgID = choresFlowName(ctx, t, env, flowMsgID)
+
+	// 2b. Skip the emoji: the assignee step edits the same message
+	choresFlowPressExpect(ctx, t, env, flowMsgID, 4, "fl:em:skip", "Clean kitchen", "assignee")
+	// 3. Assign to Alice (101) -> moves to recurrence type step
+	choresFlowPressExpect(ctx, t, env, flowMsgID, 3, "fl:usr:101", "recurrence type", "recurrence type")
+	// 4. Alice picks One time (fl:rt:once) -> skips interval, moves to calendar date step
+	choresFlowPressExpect(ctx, t, env, flowMsgID, 4, "fl:rt:once", "first due date", "calendar date")
+	// 5. Alice picks date Oct 14 2026 (fl:d:2026-10-14) -> moves to hour step
+	choresFlowPressExpect(ctx, t, env, flowMsgID, 5, "fl:d:2026-10-14", "hour", "hour")
+	// 6. Alice picks hour 10 (fl:h:10) -> moves to minute step
+	choresFlowPressExpect(ctx, t, env, flowMsgID, 6, "fl:h:10", "minute", "minute")
+	// 7. Alice picks minute 30 (fl:mi:30) -> skips anchor, moves directly to confirm step
+	choresFlowPressExpect(ctx, t, env, flowMsgID, 7, "fl:mi:30", "Confirm", "confirm")
+	// 8. Confirm (fl:ok) -> closes keyboard, creates occurrence
+	choresFlowConfirm(ctx, t, env, flowMsgID)
+
+	choresFlowVerifyMessages(t, env, flowMsgID)
+	choresFlowVerifyStored(ctx, t, env)
 }
 
 // 5.1: Weekly every 2 weeks from Oct 14 2026 (slots Oct 28 and Nov 11)

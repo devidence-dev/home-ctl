@@ -3,6 +3,7 @@ package main_test
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -172,104 +173,132 @@ func (c *simClock) Set(t time.Time) {
 	c.now = t
 }
 
-func TestEndToEnd_WorkflowsWithRestart(t *testing.T) {
+const (
+	e2eChatID           int64 = -1001234567890
+	e2eShoppingTopicID  int64 = 42
+	e2eChoresTopicID    int64 = 51
+	e2eRemindersTopicID int64 = 63
+)
+
+// e2eEnv holds the shared state the sequential workflow steps build on.
+type e2eEnv struct {
+	ctx    context.Context
+	dbPath string
+	loc    *time.Location
+	clock  *simClock
+	client *fakeTG
+	bundle *i18n.Bundle
+	users  []config.UserConfig
+	db     *sql.DB
+	hhSvc  *household.Service
+	shSvc  *shopping.Service
+	chSvc  *chores.Service
+	reSvc  *reminders.Service
+	sched  *scheduler.Scheduler
+	router *telegram.Router
+}
+
+// e2eBuildServices (re)creates all services on top of env.db, as a restart does.
+func e2eBuildServices(env *e2eEnv) {
+	hhStore := sqlite.NewHouseholdStore(env.db)
+	shStore := sqlite.NewShoppingStore(env.db)
+	chStore := sqlite.NewChoresStore(env.db)
+	reStore := sqlite.NewRemindersStore(env.db)
+	flStore := sqlite.NewFlowStore(env.db)
+	notifStore := sqlite.NewNotificationStore(env.db)
+
+	env.hhSvc = household.NewService(hhStore)
+	_ = env.hhSvc.SyncFromConfig(env.ctx, env.users, "en")
+
+	env.shSvc = shopping.NewService(shStore, env.hhSvc)
+	env.chSvc = chores.NewService(chStore, env.hhSvc, env.clock)
+	env.reSvc = reminders.NewService(reStore, env.hhSvc, env.clock)
+	flMgr := flow.NewManager(flStore, env.clock)
+
+	tgNotifier := telegram.NewNotifier(env.client, env.hhSvc, env.bundle, e2eChatID, "en")
+	env.sched = scheduler.New(scheduler.Config{
+		ChoresStore:      chStore,
+		RemindersStore:   reStore,
+		RemindersService: env.reSvc,
+		NotifStore:       notifStore,
+		Notifier:         tgNotifier,
+		Onboarding:       env.hhSvc,
+		Clock:            env.clock,
+		ReminderInterval: 1 * time.Hour,
+	})
+
+	env.router = telegram.NewRouter(
+		telegram.RouterConfig{
+			ChatID:           e2eChatID,
+			ShoppingTopicID:  e2eShoppingTopicID,
+			ChoresTopicID:    e2eChoresTopicID,
+			RemindersTopicID: e2eRemindersTopicID,
+			DefaultLocale:    "en",
+			FlowTTL:          30 * time.Minute,
+		},
+		telegram.RouterDeps{
+			Client:    env.client,
+			Household: env.hhSvc,
+			Shopping:  env.shSvc,
+			Chores:    env.chSvc,
+			Reminders: env.reSvc,
+			Flow:      flMgr,
+			I18n:      env.bundle,
+			Clock:     env.clock,
+		},
+	)
+}
+
+// e2eSetupEnv opens a fresh database, runs migrations and builds the first set of services.
+func e2eSetupEnv(t *testing.T) *e2eEnv {
+	t.Helper()
 	tempDir := t.TempDir()
-	dbPath := filepath.Join(tempDir, "e2e_homectl.db")
 
 	loc, err := time.LoadLocation("America/Guayaquil")
 	if err != nil {
 		t.Fatalf("failed to load timezone: %v", err)
 	}
 
-	clock := &simClock{
-		now: time.Date(2026, 10, 5, 8, 0, 0, 0, loc),
-		loc: loc,
+	env := &e2eEnv{
+		ctx:    context.Background(),
+		dbPath: filepath.Join(tempDir, "e2e_homectl.db"),
+		loc:    loc,
+		clock: &simClock{
+			now: time.Date(2026, 10, 5, 8, 0, 0, 0, loc),
+			loc: loc,
+		},
+		client: newFakeTG(),
+		users: []config.UserConfig{
+			{ID: 101, Name: "Alice", Username: "alice", Locale: "en"},
+			{ID: 102, Name: "Bob", Username: "bob", Locale: "es"},
+		},
 	}
 
-	client := newFakeTG()
 	localesDir := filepath.Clean("../../locales")
-	bundle, err := i18n.NewBundle(localesDir, "en", i18n.DefaultRequiredKeys, nil)
+	env.bundle, err = i18n.NewBundle(localesDir, "en", i18n.DefaultRequiredKeys, nil)
 	if err != nil {
 		t.Fatalf("failed to load i18n: %v", err)
 	}
 
-	users := []config.UserConfig{
-		{ID: 101, Name: "Alice", Username: "alice", Locale: "en"},
-		{ID: 102, Name: "Bob", Username: "bob", Locale: "es"},
-	}
-
-	const (
-		chatID           int64 = -1001234567890
-		shoppingTopicID  int64 = 42
-		choresTopicID    int64 = 51
-		remindersTopicID int64 = 63
-	)
-
 	// Step 1: Initialize Database
-	db, err := sqlite.Open(dbPath)
+	env.db, err = sqlite.Open(env.dbPath)
 	if err != nil {
 		t.Fatalf("failed to open sqlite: %v", err)
 	}
-	if err := sqlite.RunMigrations(db); err != nil {
+	if err := sqlite.RunMigrations(env.db); err != nil {
 		t.Fatalf("failed to run migrations: %v", err)
 	}
 
-	ctx := context.Background()
+	e2eBuildServices(env)
+	return env
+}
 
-	// Helper to build services from active db
-	buildServices := func() (*household.Service, *shopping.Service, *chores.Service, *reminders.Service, *scheduler.Scheduler, *telegram.Router) {
-		hhStore := sqlite.NewHouseholdStore(db)
-		shStore := sqlite.NewShoppingStore(db)
-		chStore := sqlite.NewChoresStore(db)
-		reStore := sqlite.NewRemindersStore(db)
-		flStore := sqlite.NewFlowStore(db)
-		notifStore := sqlite.NewNotificationStore(db)
-
-		hhSvc := household.NewService(hhStore)
-		_ = hhSvc.SyncFromConfig(ctx, users, "en")
-
-		shSvc := shopping.NewService(shStore, hhSvc)
-		chSvc := chores.NewService(chStore, hhSvc, clock)
-		reSvc := reminders.NewService(reStore, hhSvc, clock)
-		flMgr := flow.NewManager(flStore, clock)
-
-		tgNotifier := telegram.NewNotifier(client, hhSvc, bundle, chatID, "en")
-		sched := scheduler.New(scheduler.Config{
-			ChoresStore:      chStore,
-			RemindersStore:   reStore,
-			RemindersService: reSvc,
-			NotifStore:       notifStore,
-			Notifier:         tgNotifier,
-			Onboarding:       hhSvc,
-			Clock:            clock,
-			ReminderInterval: 1 * time.Hour,
-		})
-
-		router := telegram.NewRouter(
-			telegram.RouterConfig{
-				ChatID:           chatID,
-				ShoppingTopicID:  shoppingTopicID,
-				ChoresTopicID:    choresTopicID,
-				RemindersTopicID: remindersTopicID,
-				DefaultLocale:    "en",
-				FlowTTL:          30 * time.Minute,
-			},
-			telegram.RouterDeps{
-				Client:    client,
-				Household: hhSvc,
-				Shopping:  shSvc,
-				Chores:    chSvc,
-				Reminders: reSvc,
-				Flow:      flMgr,
-				I18n:      bundle,
-				Clock:     clock,
-			},
-		)
-
-		return hhSvc, shSvc, chSvc, reSvc, sched, router
-	}
-
-	hhSvc, _, _, _, _, router := buildServices()
+// e2eOnboard runs /start for Alice and Bob in private chats.
+func e2eOnboard(t *testing.T, env *e2eEnv) {
+	t.Helper()
+	ctx := env.ctx
+	router := env.router
+	hhSvc := env.hhSvc
 
 	// Alice and Bob onboard via /start
 	_ = router.HandleUpdate(ctx, telegram.Update{
@@ -296,6 +325,14 @@ func TestEndToEnd_WorkflowsWithRestart(t *testing.T) {
 	if !aliceConn || !bobConn {
 		t.Fatalf("expected both Alice and Bob connected after /start")
 	}
+}
+
+// e2eShoppingWorkflow runs Workflow 1: add an item, then Bob purchases it.
+func e2eShoppingWorkflow(t *testing.T, env *e2eEnv) {
+	t.Helper()
+	ctx := env.ctx
+	router := env.router
+	client := env.client
 
 	// ========================================================
 	// Workflow 1: Shopping Success Scenario
@@ -305,8 +342,8 @@ func TestEndToEnd_WorkflowsWithRestart(t *testing.T) {
 		UpdateID: 3,
 		Message: &telegram.Message{
 			MessageID:       10,
-			MessageThreadID: shoppingTopicID,
-			Chat:            telegram.Chat{ID: chatID, Type: "supergroup"},
+			MessageThreadID: e2eShoppingTopicID,
+			Chat:            telegram.Chat{ID: e2eChatID, Type: "supergroup"},
 			From:            &telegram.User{ID: 101, FirstName: "Alice"},
 			Text:            "/add",
 		},
@@ -316,8 +353,8 @@ func TestEndToEnd_WorkflowsWithRestart(t *testing.T) {
 		UpdateID: 4,
 		Message: &telegram.Message{
 			MessageID:       11,
-			MessageThreadID: shoppingTopicID,
-			Chat:            telegram.Chat{ID: chatID, Type: "supergroup"},
+			MessageThreadID: e2eShoppingTopicID,
+			Chat:            telegram.Chat{ID: e2eChatID, Type: "supergroup"},
 			From:            &telegram.User{ID: 101, FirstName: "Alice"},
 			Text:            "Milk",
 		},
@@ -327,8 +364,8 @@ func TestEndToEnd_WorkflowsWithRestart(t *testing.T) {
 		UpdateID: 5,
 		Message: &telegram.Message{
 			MessageID:       12,
-			MessageThreadID: shoppingTopicID,
-			Chat:            telegram.Chat{ID: chatID, Type: "supergroup"},
+			MessageThreadID: e2eShoppingTopicID,
+			Chat:            telegram.Chat{ID: e2eChatID, Type: "supergroup"},
 			From:            &telegram.User{ID: 101, FirstName: "Alice"},
 			Text:            "🥛",
 		},
@@ -338,8 +375,8 @@ func TestEndToEnd_WorkflowsWithRestart(t *testing.T) {
 		UpdateID: 6,
 		Message: &telegram.Message{
 			MessageID:       13,
-			MessageThreadID: shoppingTopicID,
-			Chat:            telegram.Chat{ID: chatID, Type: "supergroup"},
+			MessageThreadID: e2eShoppingTopicID,
+			Chat:            telegram.Chat{ID: e2eChatID, Type: "supergroup"},
 			From:            &telegram.User{ID: 101, FirstName: "Alice"},
 			Text:            "/add",
 		},
@@ -352,8 +389,8 @@ func TestEndToEnd_WorkflowsWithRestart(t *testing.T) {
 			From: telegram.User{ID: 101, FirstName: "Alice"},
 			Message: &telegram.Message{
 				MessageID:       addMenu.MessageID,
-				MessageThreadID: shoppingTopicID,
-				Chat:            telegram.Chat{ID: chatID, Type: "supergroup"},
+				MessageThreadID: e2eShoppingTopicID,
+				Chat:            telegram.Chat{ID: e2eChatID, Type: "supergroup"},
 			},
 			Data: "fl:sel:1",
 		},
@@ -364,8 +401,8 @@ func TestEndToEnd_WorkflowsWithRestart(t *testing.T) {
 		UpdateID: 8,
 		Message: &telegram.Message{
 			MessageID:       15,
-			MessageThreadID: shoppingTopicID,
-			Chat:            telegram.Chat{ID: chatID, Type: "supergroup"},
+			MessageThreadID: e2eShoppingTopicID,
+			Chat:            telegram.Chat{ID: e2eChatID, Type: "supergroup"},
 			From:            &telegram.User{ID: 102, FirstName: "Bob"},
 			Text:            "/list",
 		},
@@ -379,8 +416,8 @@ func TestEndToEnd_WorkflowsWithRestart(t *testing.T) {
 			From: telegram.User{ID: 102, FirstName: "Bob"},
 			Message: &telegram.Message{
 				MessageID:       16,
-				MessageThreadID: shoppingTopicID,
-				Chat:            telegram.Chat{ID: chatID, Type: "supergroup"},
+				MessageThreadID: e2eShoppingTopicID,
+				Chat:            telegram.Chat{ID: e2eChatID, Type: "supergroup"},
 			},
 			Data: "sh:p:1",
 		},
@@ -399,8 +436,8 @@ func TestEndToEnd_WorkflowsWithRestart(t *testing.T) {
 			From: telegram.User{ID: 101, FirstName: "Alice"},
 			Message: &telegram.Message{
 				MessageID:       16,
-				MessageThreadID: shoppingTopicID,
-				Chat:            telegram.Chat{ID: chatID, Type: "supergroup"},
+				MessageThreadID: e2eShoppingTopicID,
+				Chat:            telegram.Chat{ID: e2eChatID, Type: "supergroup"},
 			},
 			Data: "sh:p:1",
 		},
@@ -409,35 +446,51 @@ func TestEndToEnd_WorkflowsWithRestart(t *testing.T) {
 	if ans == nil || !strings.Contains(ans.Text, "already purchased") {
 		t.Fatalf("expected already purchased notice, got: %+v", ans)
 	}
+}
+
+// e2eRestart closes the database, reopens it from disk and rebuilds services,
+// then verifies the shopping state persisted.
+func e2eRestart(t *testing.T, env *e2eEnv) {
+	t.Helper()
+	ctx := env.ctx
 
 	// ========================================================
 	// RESTART IN THE MIDDLE
 	// ========================================================
-	_ = db.Close()
+	_ = env.db.Close()
 
 	// Re-open SQLite from disk file
-	db, err = sqlite.Open(dbPath)
+	db, err := sqlite.Open(env.dbPath)
 	if err != nil {
 		t.Fatalf("failed to re-open sqlite after restart: %v", err)
 	}
-	defer func() { _ = db.Close() }()
+	env.db = db
+	t.Cleanup(func() { _ = env.db.Close() })
 
 	if err := sqlite.RunMigrations(db); err != nil {
 		t.Fatalf("failed to run migrations on re-opened db: %v", err)
 	}
 
 	// Re-initialize services
-	_, shSvc, chSvc, reSvc, sched, router := buildServices()
+	e2eBuildServices(env)
 
 	// Verify persistence across restart
-	items, err := shSvc.ListItems(ctx)
+	items, err := env.shSvc.ListItems(ctx)
 	if err != nil || len(items) != 1 || items[0].Name != "Milk" {
 		t.Fatalf("catalog item did not persist across restart: %+v", items)
 	}
-	pending, err := shSvc.ListPending(ctx)
+	pending, err := env.shSvc.ListPending(ctx)
 	if err != nil || len(pending) != 0 {
 		t.Fatalf("pending list should be empty after purchase: %+v", pending)
 	}
+}
+
+// e2eScheduleChore runs the first half of Workflow 2 and returns the chore occurrence ID.
+func e2eScheduleChore(t *testing.T, env *e2eEnv) int64 {
+	t.Helper()
+	ctx := env.ctx
+	router := env.router
+	client := env.client
 
 	// ========================================================
 	// Workflow 2: Chore Weekly with Done
@@ -447,8 +500,8 @@ func TestEndToEnd_WorkflowsWithRestart(t *testing.T) {
 		UpdateID: 11,
 		Message: &telegram.Message{
 			MessageID:       20,
-			MessageThreadID: choresTopicID,
-			Chat:            telegram.Chat{ID: chatID, Type: "supergroup"},
+			MessageThreadID: e2eChoresTopicID,
+			Chat:            telegram.Chat{ID: e2eChatID, Type: "supergroup"},
 			From:            &telegram.User{ID: 101, FirstName: "Alice"},
 			Text:            "/add",
 		},
@@ -457,8 +510,8 @@ func TestEndToEnd_WorkflowsWithRestart(t *testing.T) {
 		UpdateID: 12,
 		Message: &telegram.Message{
 			MessageID:       21,
-			MessageThreadID: choresTopicID,
-			Chat:            telegram.Chat{ID: chatID, Type: "supergroup"},
+			MessageThreadID: e2eChoresTopicID,
+			Chat:            telegram.Chat{ID: e2eChatID, Type: "supergroup"},
 			From:            &telegram.User{ID: 101, FirstName: "Alice"},
 			Text:            "Vacuum carpets",
 		},
@@ -471,8 +524,8 @@ func TestEndToEnd_WorkflowsWithRestart(t *testing.T) {
 			From: telegram.User{ID: 101, FirstName: "Alice"},
 			Message: &telegram.Message{
 				MessageID:       choreMenu.MessageID,
-				MessageThreadID: choresTopicID,
-				Chat:            telegram.Chat{ID: chatID, Type: "supergroup"},
+				MessageThreadID: e2eChoresTopicID,
+				Chat:            telegram.Chat{ID: e2eChatID, Type: "supergroup"},
 			},
 			Data: "fl:usr:101",
 		},
@@ -485,8 +538,8 @@ func TestEndToEnd_WorkflowsWithRestart(t *testing.T) {
 			From: telegram.User{ID: 101, FirstName: "Alice"},
 			Message: &telegram.Message{
 				MessageID:       choreMenu.MessageID,
-				MessageThreadID: choresTopicID,
-				Chat:            telegram.Chat{ID: chatID, Type: "supergroup"},
+				MessageThreadID: e2eChoresTopicID,
+				Chat:            telegram.Chat{ID: e2eChatID, Type: "supergroup"},
 			},
 			Data: "fl:rt:weekly",
 		},
@@ -499,8 +552,8 @@ func TestEndToEnd_WorkflowsWithRestart(t *testing.T) {
 			From: telegram.User{ID: 101, FirstName: "Alice"},
 			Message: &telegram.Message{
 				MessageID:       choreMenu.MessageID,
-				MessageThreadID: choresTopicID,
-				Chat:            telegram.Chat{ID: chatID, Type: "supergroup"},
+				MessageThreadID: e2eChoresTopicID,
+				Chat:            telegram.Chat{ID: e2eChatID, Type: "supergroup"},
 			},
 			Data: "fl:iv:1",
 		},
@@ -513,8 +566,8 @@ func TestEndToEnd_WorkflowsWithRestart(t *testing.T) {
 			From: telegram.User{ID: 101, FirstName: "Alice"},
 			Message: &telegram.Message{
 				MessageID:       choreMenu.MessageID,
-				MessageThreadID: choresTopicID,
-				Chat:            telegram.Chat{ID: chatID, Type: "supergroup"},
+				MessageThreadID: e2eChoresTopicID,
+				Chat:            telegram.Chat{ID: e2eChatID, Type: "supergroup"},
 			},
 			Data: "fl:d:type",
 		},
@@ -524,8 +577,8 @@ func TestEndToEnd_WorkflowsWithRestart(t *testing.T) {
 		UpdateID: 17,
 		Message: &telegram.Message{
 			MessageID:       23,
-			MessageThreadID: choresTopicID,
-			Chat:            telegram.Chat{ID: chatID, Type: "supergroup"},
+			MessageThreadID: e2eChoresTopicID,
+			Chat:            telegram.Chat{ID: e2eChatID, Type: "supergroup"},
 			From:            &telegram.User{ID: 101, FirstName: "Alice"},
 			Text:            "2026-10-12 10:00",
 		},
@@ -540,8 +593,8 @@ func TestEndToEnd_WorkflowsWithRestart(t *testing.T) {
 			From: telegram.User{ID: 101, FirstName: "Alice"},
 			Message: &telegram.Message{
 				MessageID:       choreMenu.MessageID,
-				MessageThreadID: choresTopicID,
-				Chat:            telegram.Chat{ID: chatID, Type: "supergroup"},
+				MessageThreadID: e2eChoresTopicID,
+				Chat:            telegram.Chat{ID: e2eChatID, Type: "supergroup"},
 			},
 			Data: "fl:anc:scheduled",
 		},
@@ -554,28 +607,36 @@ func TestEndToEnd_WorkflowsWithRestart(t *testing.T) {
 			From: telegram.User{ID: 101, FirstName: "Alice"},
 			Message: &telegram.Message{
 				MessageID:       choreMenu.MessageID,
-				MessageThreadID: choresTopicID,
-				Chat:            telegram.Chat{ID: chatID, Type: "supergroup"},
+				MessageThreadID: e2eChoresTopicID,
+				Chat:            telegram.Chat{ID: e2eChatID, Type: "supergroup"},
 			},
 			Data: "fl:ok",
 		},
 	})
 
 	// Verify occurrence created for Oct 12 10:00
-	aliceChores, err := chSvc.ListMyOpen(ctx, 101)
+	aliceChores, err := env.chSvc.ListMyOpen(ctx, 101)
 	if err != nil || len(aliceChores.Occurrences) != 1 {
 		t.Fatalf("expected 1 open chore for Alice, got: %+v", aliceChores)
 	}
-	choreOccID := aliceChores.Occurrences[0].ID
+	return aliceChores.Occurrences[0].ID
+}
+
+// e2eCompleteChore runs the second half of Workflow 2: due notification, Done tap, successor check.
+func e2eCompleteChore(t *testing.T, env *e2eEnv, choreOccID int64) {
+	t.Helper()
+	ctx := env.ctx
+	router := env.router
+	client := env.client
 
 	// Advance clock to due date
-	clock.Set(time.Date(2026, 10, 12, 10, 0, 0, 0, loc))
+	env.clock.Set(time.Date(2026, 10, 12, 10, 0, 0, 0, env.loc))
 
 	// Scheduler scans due occurrences -> private notification sent to Alice
-	if err := sched.ScanAndNotify(ctx); err != nil {
+	if err := env.sched.ScanAndNotify(ctx); err != nil {
 		t.Fatalf("scheduler scan failed: %v", err)
 	}
-	lastMsg = client.LastSent()
+	lastMsg := client.LastSent()
 	if lastMsg == nil || lastMsg.ChatID != 101 || !strings.Contains(lastMsg.Text, "Vacuum carpets") {
 		t.Fatalf("expected private due notification for Alice, got: %+v", lastMsg)
 	}
@@ -596,12 +657,12 @@ func TestEndToEnd_WorkflowsWithRestart(t *testing.T) {
 
 	// Verify group update posted in Chores topic
 	lastMsg = client.LastSent()
-	if lastMsg == nil || lastMsg.ThreadID != choresTopicID || !strings.Contains(lastMsg.Text, "completed by Alice") {
+	if lastMsg == nil || lastMsg.ThreadID != e2eChoresTopicID || !strings.Contains(lastMsg.Text, "completed by Alice") {
 		t.Fatalf("expected group completion update in Chores topic, got: %+v", lastMsg)
 	}
 
 	// Verify successor occurrence created for next Monday (Oct 19 10:00)
-	aliceChoresAfter, err := chSvc.ListMyOpen(ctx, 101)
+	aliceChoresAfter, err := env.chSvc.ListMyOpen(ctx, 101)
 	if err != nil || len(aliceChoresAfter.Occurrences) != 1 {
 		t.Fatalf("expected 1 successor occurrence for Alice, got: %+v", aliceChoresAfter)
 	}
@@ -609,10 +670,18 @@ func TestEndToEnd_WorkflowsWithRestart(t *testing.T) {
 	if successor.ID == choreOccID {
 		t.Fatalf("successor occurrence should be a new ID, got original: %d", successor.ID)
 	}
-	expectedNext := time.Date(2026, 10, 19, 10, 0, 0, 0, loc).UTC()
+	expectedNext := time.Date(2026, 10, 19, 10, 0, 0, 0, env.loc).UTC()
 	if !successor.DueAt.Equal(expectedNext) {
 		t.Fatalf("expected successor due at %v, got %v", expectedNext, successor.DueAt)
 	}
+}
+
+// e2eScheduleReminder runs the first half of Workflow 3 and returns Bob's reminder occurrence ID.
+func e2eScheduleReminder(t *testing.T, env *e2eEnv) int64 {
+	t.Helper()
+	ctx := env.ctx
+	router := env.router
+	client := env.client
 
 	// ========================================================
 	// Workflow 3: Reminder with Postpone
@@ -622,8 +691,8 @@ func TestEndToEnd_WorkflowsWithRestart(t *testing.T) {
 		UpdateID: 20,
 		Message: &telegram.Message{
 			MessageID:       30,
-			MessageThreadID: remindersTopicID,
-			Chat:            telegram.Chat{ID: chatID, Type: "supergroup"},
+			MessageThreadID: e2eRemindersTopicID,
+			Chat:            telegram.Chat{ID: e2eChatID, Type: "supergroup"},
 			From:            &telegram.User{ID: 101, FirstName: "Alice"},
 			Text:            "/add",
 		},
@@ -632,8 +701,8 @@ func TestEndToEnd_WorkflowsWithRestart(t *testing.T) {
 		UpdateID: 21,
 		Message: &telegram.Message{
 			MessageID:       31,
-			MessageThreadID: remindersTopicID,
-			Chat:            telegram.Chat{ID: chatID, Type: "supergroup"},
+			MessageThreadID: e2eRemindersTopicID,
+			Chat:            telegram.Chat{ID: e2eChatID, Type: "supergroup"},
 			From:            &telegram.User{ID: 101, FirstName: "Alice"},
 			Text:            "Dentist appointment",
 		},
@@ -646,8 +715,8 @@ func TestEndToEnd_WorkflowsWithRestart(t *testing.T) {
 			From: telegram.User{ID: 101, FirstName: "Alice"},
 			Message: &telegram.Message{
 				MessageID:       reminderMenu.MessageID,
-				MessageThreadID: remindersTopicID,
-				Chat:            telegram.Chat{ID: chatID, Type: "supergroup"},
+				MessageThreadID: e2eRemindersTopicID,
+				Chat:            telegram.Chat{ID: e2eChatID, Type: "supergroup"},
 			},
 			Data: "fl:usr:102",
 		},
@@ -660,8 +729,8 @@ func TestEndToEnd_WorkflowsWithRestart(t *testing.T) {
 			From: telegram.User{ID: 101, FirstName: "Alice"},
 			Message: &telegram.Message{
 				MessageID:       reminderMenu.MessageID,
-				MessageThreadID: remindersTopicID,
-				Chat:            telegram.Chat{ID: chatID, Type: "supergroup"},
+				MessageThreadID: e2eRemindersTopicID,
+				Chat:            telegram.Chat{ID: e2eChatID, Type: "supergroup"},
 			},
 			Data: "fl:rt:once",
 		},
@@ -674,8 +743,8 @@ func TestEndToEnd_WorkflowsWithRestart(t *testing.T) {
 			From: telegram.User{ID: 101, FirstName: "Alice"},
 			Message: &telegram.Message{
 				MessageID:       reminderMenu.MessageID,
-				MessageThreadID: remindersTopicID,
-				Chat:            telegram.Chat{ID: chatID, Type: "supergroup"},
+				MessageThreadID: e2eRemindersTopicID,
+				Chat:            telegram.Chat{ID: e2eChatID, Type: "supergroup"},
 			},
 			Data: "fl:d:type",
 		},
@@ -685,8 +754,8 @@ func TestEndToEnd_WorkflowsWithRestart(t *testing.T) {
 		UpdateID: 25,
 		Message: &telegram.Message{
 			MessageID:       33,
-			MessageThreadID: remindersTopicID,
-			Chat:            telegram.Chat{ID: chatID, Type: "supergroup"},
+			MessageThreadID: e2eRemindersTopicID,
+			Chat:            telegram.Chat{ID: e2eChatID, Type: "supergroup"},
 			From:            &telegram.User{ID: 101, FirstName: "Alice"},
 			Text:            "2026-10-16 10:00",
 		},
@@ -701,25 +770,33 @@ func TestEndToEnd_WorkflowsWithRestart(t *testing.T) {
 			From: telegram.User{ID: 101, FirstName: "Alice"},
 			Message: &telegram.Message{
 				MessageID:       reminderMenu.MessageID,
-				MessageThreadID: remindersTopicID,
-				Chat:            telegram.Chat{ID: chatID, Type: "supergroup"},
+				MessageThreadID: e2eRemindersTopicID,
+				Chat:            telegram.Chat{ID: e2eChatID, Type: "supergroup"},
 			},
 			Data: "fl:ok",
 		},
 	})
 
-	bobReminders, err := reSvc.ListMyOpen(ctx, 102)
+	bobReminders, err := env.reSvc.ListMyOpen(ctx, 102)
 	if err != nil || len(bobReminders.Occurrences) != 1 {
 		t.Fatalf("expected 1 reminder for Bob, got: %+v", bobReminders)
 	}
-	remOccID := bobReminders.Occurrences[0].ID
+	return bobReminders.Occurrences[0].ID
+}
+
+// e2ePostponeReminder runs the due notification, the 3h postpone and the repeat-suppression checks.
+func e2ePostponeReminder(t *testing.T, env *e2eEnv, remOccID int64) {
+	t.Helper()
+	ctx := env.ctx
+	router := env.router
+	client := env.client
 
 	// Advance clock to Friday 10:00
-	clock.Set(time.Date(2026, 10, 16, 10, 0, 0, 0, loc))
+	env.clock.Set(time.Date(2026, 10, 16, 10, 0, 0, 0, env.loc))
 
 	// Scheduler scans due reminders -> notification sent to Bob
-	_ = sched.ScanAndNotify(ctx)
-	lastMsg = client.LastSent()
+	_ = env.sched.ScanAndNotify(ctx)
+	lastMsg := client.LastSent()
 	if lastMsg == nil || lastMsg.ChatID != 102 || !strings.Contains(lastMsg.Text, "Dentist appointment") {
 		t.Fatalf("expected due notification for Bob, got: %+v", lastMsg)
 	}
@@ -740,35 +817,43 @@ func TestEndToEnd_WorkflowsWithRestart(t *testing.T) {
 
 	// Verify group update in Reminders topic
 	lastMsg = client.LastSent()
-	if lastMsg == nil || lastMsg.ThreadID != remindersTopicID || !strings.Contains(lastMsg.Text, "postponed it until") {
+	if lastMsg == nil || lastMsg.ThreadID != e2eRemindersTopicID || !strings.Contains(lastMsg.Text, "postponed it until") {
 		t.Fatalf("expected group postpone update in Reminders topic, got: %+v", lastMsg)
 	}
 
 	// Verify due_at is now 13:00 (10:00 + 3h)
-	freshRem, err := reSvc.GetOccurrence(ctx, remOccID)
+	freshRem, err := env.reSvc.GetOccurrence(ctx, remOccID)
 	if err != nil {
 		t.Fatalf("failed to get reminder: %v", err)
 	}
-	expectedPostponedDue := time.Date(2026, 10, 16, 13, 0, 0, 0, loc).UTC()
+	expectedPostponedDue := time.Date(2026, 10, 16, 13, 0, 0, 0, env.loc).UTC()
 	if !freshRem.DueAt.Equal(expectedPostponedDue) {
 		t.Fatalf("expected due_at 13:00 (%v), got: %v", expectedPostponedDue, freshRem.DueAt)
 	}
 
 	// Advance clock by 1 hour (11:00) -> scheduler should NOT notify because postponed to 13:00
-	clock.Advance(1 * time.Hour)
+	env.clock.Advance(1 * time.Hour)
 	sentBefore := len(client.sent)
-	_ = sched.ScanAndNotify(ctx)
+	_ = env.sched.ScanAndNotify(ctx)
 	if len(client.sent) != sentBefore {
 		t.Fatalf("expected no notifications at 11:00 for postponed reminder")
 	}
 
 	// Advance clock to 13:00 -> scheduler notifies Bob!
-	clock.Advance(2 * time.Hour)
-	_ = sched.ScanAndNotify(ctx)
+	env.clock.Advance(2 * time.Hour)
+	_ = env.sched.ScanAndNotify(ctx)
 	lastMsg = client.LastSent()
 	if lastMsg == nil || lastMsg.ChatID != 102 || !strings.Contains(lastMsg.Text, "Dentist appointment") {
 		t.Fatalf("expected notification at postponed time 13:00 for Bob, got: %+v", lastMsg)
 	}
+}
+
+// e2eCompleteReminder runs Bob's Done tap and verifies no open reminders remain.
+func e2eCompleteReminder(t *testing.T, env *e2eEnv, remOccID int64) {
+	t.Helper()
+	ctx := env.ctx
+	router := env.router
+	client := env.client
 
 	// Bob completes the reminder ("re:c:<remOccID>")
 	_ = router.HandleUpdate(ctx, telegram.Update{
@@ -785,15 +870,30 @@ func TestEndToEnd_WorkflowsWithRestart(t *testing.T) {
 	})
 
 	// Verify reminder completed and group update posted
-	lastMsg = client.LastSent()
-	if lastMsg == nil || lastMsg.ThreadID != remindersTopicID || !strings.Contains(lastMsg.Text, "completed by Bob") {
+	lastMsg := client.LastSent()
+	if lastMsg == nil || lastMsg.ThreadID != e2eRemindersTopicID || !strings.Contains(lastMsg.Text, "completed by Bob") {
 		t.Fatalf("expected completion update in Reminders topic, got: %+v", lastMsg)
 	}
 
-	bobRemindersFinal, _ := reSvc.ListMyOpen(ctx, 102)
+	bobRemindersFinal, _ := env.reSvc.ListMyOpen(ctx, 102)
 	if len(bobRemindersFinal.Occurrences) != 0 {
 		t.Fatalf("expected 0 open reminders for Bob after completion, got: %+v", bobRemindersFinal)
 	}
+}
+
+func TestEndToEnd_WorkflowsWithRestart(t *testing.T) {
+	env := e2eSetupEnv(t)
+	e2eOnboard(t, env)
+	e2eShoppingWorkflow(t, env)
+
+	e2eRestart(t, env)
+
+	choreOccID := e2eScheduleChore(t, env)
+	e2eCompleteChore(t, env, choreOccID)
+
+	remOccID := e2eScheduleReminder(t, env)
+	e2ePostponeReminder(t, env, remOccID)
+	e2eCompleteReminder(t, env, remOccID)
 }
 
 func TestStartup_UnreachableAPI_LogsErrorsAndContinues(t *testing.T) {

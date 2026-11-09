@@ -9,7 +9,7 @@ on:
 jobs:
   ci:
     name: 🧪 CI
-    uses: devidence-dev/workflows/.github/workflows/ci-go.yml@v1
+    uses: devidence-dev/workflows/.github/workflows/ci-go.yml@v2
     with:
       go_version_file: "go.mod"
       build_target: "./cmd/homectl"

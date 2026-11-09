@@ -37,15 +37,9 @@ func pressReminderCallback(ctx context.Context, env *testEnv, updateID int64, us
 	})
 }
 
-// 6.1: One-off reminder for Bob (no interval or anchor asked), with one edited message throughout.
-func TestRemindersFlow_OneOff(t *testing.T) {
-	env, err := setupTestEnv()
-	if err != nil {
-		t.Fatalf("failed to setup test env: %v", err)
-	}
-	ctx := context.Background()
-
-	// 1. /add in Reminders topic
+// remindersFlowStart runs /add in the Reminders topic and checks the title prompt. Returns its message ID.
+func remindersFlowStart(ctx context.Context, t *testing.T, env *testEnv) int64 {
+	t.Helper()
 	uAdd := telegram.Update{
 		UpdateID: 1,
 		Message: &telegram.Message{
@@ -63,9 +57,12 @@ func TestRemindersFlow_OneOff(t *testing.T) {
 	if initialMsg == nil || !strings.Contains(initialMsg.Text, "title for the reminder") {
 		t.Fatalf("expected title prompt, got: %+v", initialMsg)
 	}
-	flowMsgID := initialMsg.MessageID
+	return initialMsg.MessageID
+}
 
-	// 2. Alice types title
+// remindersFlowTitle types the title, which re-anchors the flow to a new emoji prompt. Returns the new flow message ID.
+func remindersFlowTitle(ctx context.Context, t *testing.T, env *testEnv, initialMsgID int64) int64 {
+	t.Helper()
 	uTitle := telegram.Update{
 		UpdateID: 2,
 		Message: &telegram.Message{
@@ -81,76 +78,42 @@ func TestRemindersFlow_OneOff(t *testing.T) {
 	}
 	// A typed title re-anchors: the emoji step is a new message below the text and the title prompt is deleted.
 	lastSent := env.client.LastSent()
-	if lastSent == nil || lastSent.MessageID == flowMsgID || !strings.Contains(lastSent.Text, "Choose an emoji") {
+	if lastSent == nil || lastSent.MessageID == initialMsgID || !strings.Contains(lastSent.Text, "Choose an emoji") {
 		t.Fatalf("expected emoji prompt as a new message after the typed title, got: %+v", lastSent)
 	}
-	if deleted := env.client.DeletedMessages(); len(deleted) != 1 || deleted[0] != flowMsgID {
-		t.Fatalf("expected title prompt %d deleted, got %v", flowMsgID, deleted)
+	if deleted := env.client.DeletedMessages(); len(deleted) != 1 || deleted[0] != initialMsgID {
+		t.Fatalf("expected title prompt %d deleted, got %v", initialMsgID, deleted)
 	}
-	flowMsgID = lastSent.MessageID // the active flow message from here on
+	return lastSent.MessageID // the active flow message from here on
+}
 
-	// 2b. Skip the emoji: the target step edits the same message
-	if err := pressReminderCallback(ctx, env, 30, 101, "fl:em:skip"); err != nil {
-		t.Fatalf("emoji skip failed: %v", err)
-	}
-	if lastEdit := env.client.LastEdited(); lastEdit == nil || lastEdit.MessageID != flowMsgID || !strings.Contains(lastEdit.Text, "reminder is for") {
-		t.Fatalf("expected target prompt on message %d, got: %+v", flowMsgID, lastEdit)
-	}
-
-	// 3. Alice selects Bob (102) as target
-	if err := pressReminderCallback(ctx, env, 3, 101, "fl:usr:102"); err != nil {
-		t.Fatalf("target callback failed: %v", err)
+// remindersFlowPressExpect presses one flow button and checks the flow message now shows the wanted prompt.
+func remindersFlowPressExpect(ctx context.Context, t *testing.T, env *testEnv, flowMsgID, updateID int64, data, want, prompt string) {
+	t.Helper()
+	if err := pressReminderCallback(ctx, env, updateID, 101, data); err != nil {
+		t.Fatalf("%s failed: %v", data, err)
 	}
 	lastEdit := env.client.LastEdited()
-	if lastEdit == nil || lastEdit.MessageID != flowMsgID || !strings.Contains(lastEdit.Text, "recurrence type") {
-		t.Fatalf("expected recurrence prompt on message %d, got: %+v", flowMsgID, lastEdit)
+	if lastEdit == nil || lastEdit.MessageID != flowMsgID || !strings.Contains(lastEdit.Text, want) {
+		t.Fatalf("expected %s prompt on message %d, got: %+v", prompt, flowMsgID, lastEdit)
 	}
+}
 
-	// 4. Alice selects One time (fl:rt:once) -> skips interval, asks date
-	if err := pressReminderCallback(ctx, env, 4, 101, "fl:rt:once"); err != nil {
-		t.Fatalf("recurrence type callback failed: %v", err)
-	}
-	lastEdit = env.client.LastEdited()
-	if lastEdit == nil || lastEdit.MessageID != flowMsgID || !strings.Contains(lastEdit.Text, "first due date") {
-		t.Fatalf("expected date prompt on message %d, got: %+v", flowMsgID, lastEdit)
-	}
-
-	// 5. Date: Friday Oct 9 2026
-	if err := pressReminderCallback(ctx, env, 5, 101, "fl:d:2026-10-09"); err != nil {
-		t.Fatalf("date callback failed: %v", err)
-	}
-	lastEdit = env.client.LastEdited()
-	if lastEdit == nil || lastEdit.MessageID != flowMsgID || !strings.Contains(lastEdit.Text, "hour") {
-		t.Fatalf("expected hour prompt on message %d, got: %+v", flowMsgID, lastEdit)
-	}
-
-	// 6. Hour 10
-	if err := pressReminderCallback(ctx, env, 6, 101, "fl:h:10"); err != nil {
-		t.Fatalf("hour callback failed: %v", err)
-	}
-	lastEdit = env.client.LastEdited()
-	if lastEdit == nil || lastEdit.MessageID != flowMsgID || !strings.Contains(lastEdit.Text, "minute") {
-		t.Fatalf("expected minute prompt on message %d, got: %+v", flowMsgID, lastEdit)
-	}
-
-	// 7. Minute 00 -> skips anchor, asks confirmation
-	if err := pressReminderCallback(ctx, env, 7, 101, "fl:mi:00"); err != nil {
-		t.Fatalf("minute callback failed: %v", err)
-	}
-	lastEdit = env.client.LastEdited()
-	if lastEdit == nil || lastEdit.MessageID != flowMsgID || !strings.Contains(lastEdit.Text, "Confirm") {
-		t.Fatalf("expected confirm prompt on message %d, got: %+v", flowMsgID, lastEdit)
-	}
-
-	// 8. Confirm -> closes keyboard, creates occurrence for Bob
+// remindersFlowConfirm presses confirm and checks the flow message lost its keyboard.
+func remindersFlowConfirm(ctx context.Context, t *testing.T, env *testEnv, flowMsgID int64) {
+	t.Helper()
 	if err := pressReminderCallback(ctx, env, 8, 101, "fl:ok"); err != nil {
 		t.Fatalf("confirm callback failed: %v", err)
 	}
-	lastEdit = env.client.LastEdited()
+	lastEdit := env.client.LastEdited()
 	if lastEdit == nil || lastEdit.MessageID != flowMsgID || len(lastEdit.Markup.InlineKeyboard) != 0 {
 		t.Fatalf("expected closed keyboard after confirm, got: %+v", lastEdit)
 	}
+}
 
+// remindersFlowVerifyMessages checks that the flow used exactly two messages and edited only the flow message.
+func remindersFlowVerifyMessages(t *testing.T, env *testEnv, flowMsgID int64) {
+	t.Helper()
 	// Two messages: the initial prompt, then the step re-anchored below the typed answer; button steps edit that one
 	if len(env.client.SentMessages()) != 2 {
 		t.Fatalf("expected 2 messages sent, got %d", len(env.client.SentMessages()))
@@ -161,8 +124,11 @@ func TestRemindersFlow_OneOff(t *testing.T) {
 			t.Fatalf("expected edit to message %d, got %d", flowMsgID, em.MessageID)
 		}
 	}
+}
 
-	// Verify Bob has 1 open reminder, Alice has 0
+// remindersFlowVerifyStored checks the one-off reminder stored for Bob and nothing for Alice.
+func remindersFlowVerifyStored(ctx context.Context, t *testing.T, env *testEnv) {
+	t.Helper()
 	bobReminders, err := env.reminders.ListMyOpen(ctx, 102)
 	if err != nil || len(bobReminders.Occurrences) != 1 {
 		t.Fatalf("expected 1 reminder for Bob, got: %+v", bobReminders)
@@ -182,6 +148,36 @@ func TestRemindersFlow_OneOff(t *testing.T) {
 	if occ.Definition.RecurrenceInterval != nil {
 		t.Fatalf("expected nil recurrence for one-off reminder, got: %+v", occ.Definition.RecurrenceInterval)
 	}
+}
+
+// 6.1: One-off reminder for Bob (no interval or anchor asked), with one edited message throughout.
+func TestRemindersFlow_OneOff(t *testing.T) {
+	env, err := setupTestEnv()
+	if err != nil {
+		t.Fatalf("failed to setup test env: %v", err)
+	}
+	ctx := context.Background()
+
+	flowMsgID := remindersFlowStart(ctx, t, env)
+	flowMsgID = remindersFlowTitle(ctx, t, env, flowMsgID)
+
+	// 2b. Skip the emoji: the target step edits the same message
+	remindersFlowPressExpect(ctx, t, env, flowMsgID, 30, "fl:em:skip", "reminder is for", "target")
+	// 3. Alice selects Bob (102) as target
+	remindersFlowPressExpect(ctx, t, env, flowMsgID, 3, "fl:usr:102", "recurrence type", "recurrence type")
+	// 4. Alice selects One time (fl:rt:once) -> skips interval, asks date
+	remindersFlowPressExpect(ctx, t, env, flowMsgID, 4, "fl:rt:once", "first due date", "date")
+	// 5. Date: Friday Oct 9 2026
+	remindersFlowPressExpect(ctx, t, env, flowMsgID, 5, "fl:d:2026-10-09", "hour", "hour")
+	// 6. Hour 10
+	remindersFlowPressExpect(ctx, t, env, flowMsgID, 6, "fl:h:10", "minute", "minute")
+	// 7. Minute 00 -> skips anchor, asks confirmation
+	remindersFlowPressExpect(ctx, t, env, flowMsgID, 7, "fl:mi:00", "Confirm", "confirm")
+	// 8. Confirm -> closes keyboard, creates occurrence for Bob
+	remindersFlowConfirm(ctx, t, env, flowMsgID)
+
+	remindersFlowVerifyMessages(t, env, flowMsgID)
+	remindersFlowVerifyStored(ctx, t, env)
 }
 
 // 6.1: Daily every-2-days reminder whose next slot is two days after the first,

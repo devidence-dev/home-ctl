@@ -111,6 +111,60 @@ func flowState(ctx context.Context, t *testing.T, env *testEnv, threadID int64) 
 	return state.Step, payload
 }
 
+// emojiStepRunChore runs one chore emoji path (press, then optional typed answers) and stores the chore.
+func emojiStepRunChore(t *testing.T, press string, typed []string, wantEmoji string) {
+	t.Helper()
+	env, err := setupTestEnv()
+	if err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+	ctx := context.Background()
+	env.clock.now = time.Date(2026, 10, 5, 14, 20, 0, 0, env.clock.loc)
+
+	chooseChoreName(ctx, t, env, "Sweep patio")
+	if err := pressChoreCallback(ctx, env, 10, 101, press); err != nil {
+		t.Fatalf("%s failed: %v", press, err)
+	}
+	emojiStepChoreTyped(ctx, t, env, typed)
+	emojiStepChoreConfirm(ctx, t, env, wantEmoji)
+}
+
+// emojiStepChoreTyped sends each typed answer in order.
+func emojiStepChoreTyped(ctx context.Context, t *testing.T, env *testEnv, typed []string) {
+	t.Helper()
+	for i, text := range typed {
+		if err := polishChoreText(ctx, env, int64(20+i), 101, text); err != nil {
+			t.Fatalf("typed %q failed: %v", text, err)
+		}
+	}
+}
+
+// emojiStepChoreConfirm walks the schedule steps, confirms, and checks the stored chore emoji.
+func emojiStepChoreConfirm(ctx context.Context, t *testing.T, env *testEnv, wantEmoji string) {
+	t.Helper()
+	steps := []string{"fl:usr:101", "fl:rt:once", "fl:d:2026-10-14", "fl:h:10", "fl:mi:00"}
+	for i, data := range steps {
+		if err := pressChoreCallback(ctx, env, int64(40+i), 101, data); err != nil {
+			t.Fatalf("%s failed: %v", data, err)
+		}
+	}
+	edit := env.client.LastEdited()
+	if edit == nil || !strings.Contains(edit.Text, wantEmoji+" Sweep patio") {
+		t.Fatalf("expected confirmation with %s in the header and summary, got %+v", wantEmoji, edit)
+	}
+	if err := pressChoreCallback(ctx, env, 50, 101, "fl:ok"); err != nil {
+		t.Fatalf("confirm failed: %v", err)
+	}
+
+	defs, err := env.chores.ListDefinitions(ctx)
+	if err != nil {
+		t.Fatalf("list definitions: %v", err)
+	}
+	if len(defs) != 1 || defs[0].Name != "Sweep patio" || defs[0].Emoji != wantEmoji {
+		t.Fatalf("expected stored definition with %s, got %+v", wantEmoji, defs)
+	}
+}
+
 func TestChoreEmojiStep_StoresChosenEmoji(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -125,44 +179,7 @@ func TestChoreEmojiStep_StoresChosenEmoji(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			env, err := setupTestEnv()
-			if err != nil {
-				t.Fatalf("setup failed: %v", err)
-			}
-			ctx := context.Background()
-			env.clock.now = time.Date(2026, 10, 5, 14, 20, 0, 0, env.clock.loc)
-
-			chooseChoreName(ctx, t, env, "Sweep patio")
-			if err := pressChoreCallback(ctx, env, 10, 101, c.press); err != nil {
-				t.Fatalf("%s failed: %v", c.press, err)
-			}
-			for i, text := range c.typed {
-				if err := polishChoreText(ctx, env, int64(20+i), 101, text); err != nil {
-					t.Fatalf("typed %q failed: %v", text, err)
-				}
-			}
-
-			steps := []string{"fl:usr:101", "fl:rt:once", "fl:d:2026-10-14", "fl:h:10", "fl:mi:00"}
-			for i, data := range steps {
-				if err := pressChoreCallback(ctx, env, int64(40+i), 101, data); err != nil {
-					t.Fatalf("%s failed: %v", data, err)
-				}
-			}
-			edit := env.client.LastEdited()
-			if edit == nil || !strings.Contains(edit.Text, c.wantEmoji+" Sweep patio") {
-				t.Fatalf("expected confirmation with %s in the header and summary, got %+v", c.wantEmoji, edit)
-			}
-			if err := pressChoreCallback(ctx, env, 50, 101, "fl:ok"); err != nil {
-				t.Fatalf("confirm failed: %v", err)
-			}
-
-			defs, err := env.chores.ListDefinitions(ctx)
-			if err != nil {
-				t.Fatalf("list definitions: %v", err)
-			}
-			if len(defs) != 1 || defs[0].Name != "Sweep patio" || defs[0].Emoji != c.wantEmoji {
-				t.Fatalf("expected stored definition with %s, got %+v", c.wantEmoji, defs)
-			}
+			emojiStepRunChore(t, c.press, c.typed, c.wantEmoji)
 		})
 	}
 }
@@ -237,6 +254,58 @@ func TestChoreEmojiStep_ExistingChoreKeepsEmoji(t *testing.T) {
 	}
 }
 
+// emojiStepRunReminder runs one reminder emoji path (press, then an optional typed emoji) and stores the reminder.
+func emojiStepRunReminder(t *testing.T, press, typed, wantEmoji string) {
+	t.Helper()
+	env, err := setupTestEnv()
+	if err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+	ctx := context.Background()
+	env.clock.now = time.Date(2026, 10, 5, 14, 20, 0, 0, env.clock.loc)
+
+	if err := sendText(ctx, env, 1, 101, 63, "/add"); err != nil {
+		t.Fatalf("/add failed: %v", err)
+	}
+	if err := sendText(ctx, env, 2, 101, 63, "Pay power bill"); err != nil {
+		t.Fatalf("title failed: %v", err)
+	}
+	if last := env.client.LastSent(); last == nil || !strings.Contains(last.Text, env.i18n.T("en", "picker.prompt_emoji")) {
+		t.Fatalf("expected emoji step after the title, got %+v", last)
+	}
+	if err := pressReminderCallback(ctx, env, 10, 101, press); err != nil {
+		t.Fatalf("%s failed: %v", press, err)
+	}
+	if typed != "" {
+		if err := sendText(ctx, env, 20, 101, 63, typed); err != nil {
+			t.Fatalf("typed emoji failed: %v", err)
+		}
+	}
+	emojiStepReminderConfirm(ctx, t, env, wantEmoji)
+}
+
+// emojiStepReminderConfirm walks the schedule steps, confirms, and checks the stored reminder emoji.
+func emojiStepReminderConfirm(ctx context.Context, t *testing.T, env *testEnv, wantEmoji string) {
+	t.Helper()
+	steps := []string{"fl:usr:102", "fl:rt:once", "fl:d:2026-10-14", "fl:h:10", "fl:mi:00"}
+	for i, data := range steps {
+		if err := pressReminderCallback(ctx, env, int64(40+i), 101, data); err != nil {
+			t.Fatalf("%s failed: %v", data, err)
+		}
+	}
+	if err := pressReminderCallback(ctx, env, 50, 101, "fl:ok"); err != nil {
+		t.Fatalf("confirm failed: %v", err)
+	}
+
+	defs, err := env.reminders.ListDefinitions(ctx)
+	if err != nil {
+		t.Fatalf("list definitions: %v", err)
+	}
+	if len(defs) != 1 || defs[0].Title != "Pay power bill" || defs[0].Emoji != wantEmoji {
+		t.Fatalf("expected stored reminder with %s, got %+v", wantEmoji, defs)
+	}
+}
+
 func TestReminderEmojiStep_StoresChosenEmoji(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -250,48 +319,7 @@ func TestReminderEmojiStep_StoresChosenEmoji(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			env, err := setupTestEnv()
-			if err != nil {
-				t.Fatalf("setup failed: %v", err)
-			}
-			ctx := context.Background()
-			env.clock.now = time.Date(2026, 10, 5, 14, 20, 0, 0, env.clock.loc)
-
-			if err := sendText(ctx, env, 1, 101, 63, "/add"); err != nil {
-				t.Fatalf("/add failed: %v", err)
-			}
-			if err := sendText(ctx, env, 2, 101, 63, "Pay power bill"); err != nil {
-				t.Fatalf("title failed: %v", err)
-			}
-			if last := env.client.LastSent(); last == nil || !strings.Contains(last.Text, env.i18n.T("en", "picker.prompt_emoji")) {
-				t.Fatalf("expected emoji step after the title, got %+v", last)
-			}
-			if err := pressReminderCallback(ctx, env, 10, 101, c.press); err != nil {
-				t.Fatalf("%s failed: %v", c.press, err)
-			}
-			if c.typed != "" {
-				if err := sendText(ctx, env, 20, 101, 63, c.typed); err != nil {
-					t.Fatalf("typed emoji failed: %v", err)
-				}
-			}
-
-			steps := []string{"fl:usr:102", "fl:rt:once", "fl:d:2026-10-14", "fl:h:10", "fl:mi:00"}
-			for i, data := range steps {
-				if err := pressReminderCallback(ctx, env, int64(40+i), 101, data); err != nil {
-					t.Fatalf("%s failed: %v", data, err)
-				}
-			}
-			if err := pressReminderCallback(ctx, env, 50, 101, "fl:ok"); err != nil {
-				t.Fatalf("confirm failed: %v", err)
-			}
-
-			defs, err := env.reminders.ListDefinitions(ctx)
-			if err != nil {
-				t.Fatalf("list definitions: %v", err)
-			}
-			if len(defs) != 1 || defs[0].Title != "Pay power bill" || defs[0].Emoji != c.wantEmoji {
-				t.Fatalf("expected stored reminder with %s, got %+v", c.wantEmoji, defs)
-			}
+			emojiStepRunReminder(t, c.press, c.typed, c.wantEmoji)
 		})
 	}
 }

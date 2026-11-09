@@ -28,6 +28,16 @@ func TestFlowStore_Integration(t *testing.T) {
 
 	now := time.Now().UTC().Truncate(time.Second)
 
+	keyAliceChores := flowStoreTopicsAndConcurrentUsers(ctx, t, fStore, now)
+	flowStoreExpiryPurgeDelete(ctx, t, fStore, now, keyAliceChores)
+	flowStoreMessageIDRoundTrip(ctx, t, fStore, now)
+	flowStoreExpiredMessageID(ctx, t, fStore, now)
+}
+
+// flowStoreTopicsAndConcurrentUsers covers steps 1-3 of TestFlowStore_Integration and returns
+// Alice's chores key for the later steps.
+func flowStoreTopicsAndConcurrentUsers(ctx context.Context, t *testing.T, fStore *sqlite.FlowStore, now time.Time) flow.Key {
+	t.Helper()
 	// 1. Independent topics for same user (Alice in topic 51 Chores and topic 42 Shopping)
 	keyAliceChores := flow.Key{UserID: 1001, ChatID: -100, ThreadID: 51}
 	keyAliceShopping := flow.Key{UserID: 1001, ChatID: -100, ThreadID: 42}
@@ -74,11 +84,16 @@ func TestFlowStore_Integration(t *testing.T) {
 	if err != nil || stSurvives.Step != "due_date" {
 		t.Fatalf("failed to read persisted flow state")
 	}
+	return keyAliceChores
+}
 
+// flowStoreExpiryPurgeDelete covers steps 4-6 of TestFlowStore_Integration.
+func flowStoreExpiryPurgeDelete(ctx context.Context, t *testing.T, fStore *sqlite.FlowStore, now time.Time, keyAliceChores flow.Key) {
+	t.Helper()
 	// 4. Expiry: query after expires_at
 	keyExpired := flow.Key{UserID: 1001, ChatID: -100, ThreadID: 99}
 	_ = fStore.Set(ctx, keyExpired, "step1", []byte(`{}`), now.Add(-time.Minute))
-	_, err = fStore.Get(ctx, keyExpired, now)
+	_, err := fStore.Get(ctx, keyExpired, now)
 	if !errors.Is(err, flow.ErrFlowExpired) {
 		t.Fatalf("expected ErrFlowExpired for past timestamp, got %v", err)
 	}
@@ -99,7 +114,11 @@ func TestFlowStore_Integration(t *testing.T) {
 	if !errors.Is(err, flow.ErrNoFlow) {
 		t.Fatalf("expected ErrNoFlow after delete, got %v", err)
 	}
+}
 
+// flowStoreMessageIDRoundTrip covers step 7 of TestFlowStore_Integration.
+func flowStoreMessageIDRoundTrip(ctx context.Context, t *testing.T, fStore *sqlite.FlowStore, now time.Time) {
+	t.Helper()
 	// 7. Message ID round-trip and rows without id loading
 	keyBobMsg := flow.Key{UserID: 1002, ChatID: -100, ThreadID: 60}
 	if err := fStore.Set(ctx, keyBobMsg, "step_bob", []byte(`{}`), now.Add(30*time.Minute)); err != nil {
@@ -135,7 +154,11 @@ func TestFlowStore_Integration(t *testing.T) {
 	if err := fStore.SetMessageID(ctx, flow.Key{UserID: 9999, ChatID: -100, ThreadID: 60}, 123); !errors.Is(err, flow.ErrNoFlow) {
 		t.Fatalf("expected ErrNoFlow for non-existent flow, got %v", err)
 	}
+}
 
+// flowStoreExpiredMessageID covers step 8 of TestFlowStore_Integration.
+func flowStoreExpiredMessageID(ctx context.Context, t *testing.T, fStore *sqlite.FlowStore, now time.Time) {
+	t.Helper()
 	// 8. Expired row with message ID is not returned
 	keyExpiredMsg := flow.Key{UserID: 1001, ChatID: -100, ThreadID: 70}
 	if err := fStore.Set(ctx, keyExpiredMsg, "step_exp", []byte(`{}`), now.Add(-time.Minute)); err != nil {
@@ -144,7 +167,7 @@ func TestFlowStore_Integration(t *testing.T) {
 	if err := fStore.SetMessageID(ctx, keyExpiredMsg, 66666); err != nil {
 		t.Fatalf("SetMessageID failed: %v", err)
 	}
-	_, err = fStore.GetByMessage(ctx, -100, 70, 66666, now)
+	_, err := fStore.GetByMessage(ctx, -100, 70, 66666, now)
 	if !errors.Is(err, flow.ErrFlowExpired) {
 		t.Fatalf("expected ErrFlowExpired from GetByMessage, got %v", err)
 	}

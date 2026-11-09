@@ -68,6 +68,25 @@ func mockEnv(m map[string]string) func(string) string {
 	}
 }
 
+func configCheckLoadScenario(t *testing.T, expectErrSub string, checkResult func(t *testing.T, cfg *config.Config), res *config.Config, err error) {
+	t.Helper()
+	if expectErrSub != "" {
+		if err == nil {
+			t.Fatalf("expected error containing %q, got nil", expectErrSub)
+		}
+		if !strings.Contains(err.Error(), expectErrSub) {
+			t.Fatalf("expected error containing %q, got %q", expectErrSub, err.Error())
+		}
+	} else {
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if checkResult != nil {
+			checkResult(t, res)
+		}
+	}
+}
+
 func TestLoad_Scenarios(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -348,21 +367,7 @@ telegram:
 				Getenv:     mockEnv(env),
 			})
 
-			if tc.expectErrSub != "" {
-				if err == nil {
-					t.Fatalf("expected error containing %q, got nil", tc.expectErrSub)
-				}
-				if !strings.Contains(err.Error(), tc.expectErrSub) {
-					t.Fatalf("expected error containing %q, got %q", tc.expectErrSub, err.Error())
-				}
-			} else {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if tc.checkResult != nil {
-					tc.checkResult(t, res)
-				}
-			}
+			configCheckLoadScenario(t, tc.expectErrSub, tc.checkResult, res, err)
 		})
 	}
 }

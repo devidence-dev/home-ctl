@@ -211,8 +211,15 @@ func (f *fakeRemindersStore) setLastNotificationTime(occID int64, t time.Time) {
 	f.lastNotified[occID] = &t
 }
 
-func TestReminders_TargetOnly_AndRepeatPolicy(t *testing.T) {
-	ctx := context.Background()
+type remindersTargetOnlyFixture struct {
+	ctx   context.Context
+	clock *fakeClock
+	store *fakeRemindersStore
+	svc   *reminders.Service
+	occ   *reminders.Occurrence
+}
+
+func remindersTargetOnlyNewFixture() *remindersTargetOnlyFixture {
 	loc := time.UTC
 	clock := &fakeClock{
 		now: time.Date(2026, time.October, 6, 10, 0, 0, 0, loc),
@@ -225,22 +232,33 @@ func TestReminders_TargetOnly_AndRepeatPolicy(t *testing.T) {
 		},
 	}
 	store := newFakeRemindersStore()
-	svc := reminders.NewService(store, members, clock)
+	return &remindersTargetOnlyFixture{
+		ctx:   context.Background(),
+		clock: clock,
+		store: store,
+		svc:   reminders.NewService(store, members, clock),
+	}
+}
 
+func remindersTargetOnlyCheckValidation(t *testing.T, f *remindersTargetOnlyFixture) {
+	t.Helper()
 	// Blank title rejected
-	_, err := svc.CreateDefinition(ctx, 1001, 1002, "  ", "💊", "", nil)
+	_, err := f.svc.CreateDefinition(f.ctx, 1001, 1002, "  ", "💊", "", nil)
 	if !errors.Is(err, reminders.ErrBlankTitle) {
 		t.Fatalf("expected ErrBlankTitle, got %v", err)
 	}
 
 	// Target not a member rejected
-	_, err = svc.CreateDefinition(ctx, 1001, 9999, "Buy medicine", "💊", "", nil)
+	_, err = f.svc.CreateDefinition(f.ctx, 1001, 9999, "Buy medicine", "💊", "", nil)
 	if !errors.Is(err, reminders.ErrNotMember) {
 		t.Fatalf("expected ErrNotMember, got %v", err)
 	}
+}
 
+func remindersTargetOnlyScheduleOccurrence(t *testing.T, f *remindersTargetOnlyFixture) {
+	t.Helper()
 	// Create valid reminder for Bob
-	def, err := svc.CreateDefinition(ctx, 1001, 1002, "Buy medicine", "💊", "", &recurrence.Rule{
+	def, err := f.svc.CreateDefinition(f.ctx, 1001, 1002, "Buy medicine", "💊", "", &recurrence.Rule{
 		Interval: 1,
 		Unit:     recurrence.UnitDay,
 		Anchor:   recurrence.AnchorScheduled,
@@ -250,91 +268,110 @@ func TestReminders_TargetOnly_AndRepeatPolicy(t *testing.T) {
 	}
 
 	// Schedule occurrence due today at 10:00
-	occ, err := svc.ScheduleOccurrence(ctx, 1001, def.ID, clock.now)
+	occ, err := f.svc.ScheduleOccurrence(f.ctx, 1001, def.ID, f.clock.now)
 	if err != nil {
 		t.Fatalf("ScheduleOccurrence failed: %v", err)
 	}
 	if occ.TargetUserID != 1002 {
 		t.Fatalf("expected target 1002, got %d", occ.TargetUserID)
 	}
+	f.occ = occ
+}
 
+func remindersTargetOnlyCheckTargetOnly(t *testing.T, f *remindersTargetOnlyFixture) {
+	t.Helper()
 	// 1. Target-only check: Alice cannot complete Bob's reminder
-	_, _, err = svc.Complete(ctx, 1001, occ.ID, clock.now)
+	_, _, err := f.svc.Complete(f.ctx, 1001, f.occ.ID, f.clock.now)
 	if !errors.Is(err, reminders.ErrNotTarget) {
 		t.Fatalf("expected ErrNotTarget when Alice completes Bob's reminder, got %v", err)
 	}
 
 	// Alice cannot postpone Bob's reminder
-	_, err = svc.Postpone(ctx, 1001, occ.ID, clock.now.Add(time.Hour))
+	_, err = f.svc.Postpone(f.ctx, 1001, f.occ.ID, f.clock.now.Add(time.Hour))
 	if !errors.Is(err, reminders.ErrNotTarget) {
 		t.Fatalf("expected ErrNotTarget when Alice postpones, got %v", err)
 	}
 
 	// Non-target with a past time still gets ErrNotTarget, not a time error
-	_, err = svc.Postpone(ctx, 1001, occ.ID, clock.now.Add(-time.Hour))
+	_, err = f.svc.Postpone(f.ctx, 1001, f.occ.ID, f.clock.now.Add(-time.Hour))
 	if !errors.Is(err, reminders.ErrNotTarget) {
 		t.Fatalf("expected ErrNotTarget for non-target with past time, got %v", err)
 	}
 
 	// Target with a past time gets ErrPastDueTime
-	_, err = svc.Postpone(ctx, 1002, occ.ID, clock.now.Add(-time.Hour))
+	_, err = f.svc.Postpone(f.ctx, 1002, f.occ.ID, f.clock.now.Add(-time.Hour))
 	if !errors.Is(err, reminders.ErrPastDueTime) {
 		t.Fatalf("expected ErrPastDueTime for target with past time, got %v", err)
 	}
+}
 
+func remindersTargetOnlyCheckRepeatPolicy(t *testing.T, f *remindersTargetOnlyFixture) {
+	t.Helper()
 	// 2. Repeat-notification policy test (10:00, 11:00, 12:00 repeats)
 	interval := time.Hour
 
 	// At 10:00 (first notification due)
-	due10, err := svc.IsNotificationDue(ctx, occ, interval, clock.now)
+	due10, err := f.svc.IsNotificationDue(f.ctx, f.occ, interval, f.clock.now)
 	if err != nil || !due10 {
 		t.Fatalf("expected notification due at 10:00")
 	}
 
 	// Recorded 10:00 send
-	store.setLastNotificationTime(occ.ID, clock.now)
+	f.store.setLastNotificationTime(f.occ.ID, f.clock.now)
 
 	// At 10:30 (interval not elapsed)
-	due1030, err := svc.IsNotificationDue(ctx, occ, interval, clock.now.Add(30*time.Minute))
+	due1030, err := f.svc.IsNotificationDue(f.ctx, f.occ, interval, f.clock.now.Add(30*time.Minute))
 	if err != nil || due1030 {
 		t.Fatalf("expected notification NOT due at 10:30")
 	}
 
 	// At 11:00 (repeat due)
-	due11, err := svc.IsNotificationDue(ctx, occ, interval, clock.now.Add(time.Hour))
+	due11, err := f.svc.IsNotificationDue(f.ctx, f.occ, interval, f.clock.now.Add(time.Hour))
 	if err != nil || !due11 {
 		t.Fatalf("expected repeat notification due at 11:00")
 	}
-	store.setLastNotificationTime(occ.ID, clock.now.Add(time.Hour))
+	f.store.setLastNotificationTime(f.occ.ID, f.clock.now.Add(time.Hour))
 
 	// At 12:00 (next repeat due)
-	due12, err := svc.IsNotificationDue(ctx, occ, interval, clock.now.Add(2*time.Hour))
+	due12, err := f.svc.IsNotificationDue(f.ctx, f.occ, interval, f.clock.now.Add(2*time.Hour))
 	if err != nil || !due12 {
 		t.Fatalf("expected repeat notification due at 12:00")
 	}
+}
+
+// remindersTargetOnlyCheckPostpone returns the postponed due time for the completion check.
+func remindersTargetOnlyCheckPostpone(t *testing.T, f *remindersTargetOnlyFixture) time.Time {
+	t.Helper()
+	interval := time.Hour
 
 	// 3. Postpone stops repeats
 	// Bob postpones at 11:10 by 3 hours (new due = 14:10)
-	postponedDue := clock.now.Add(time.Hour + 10*time.Minute).Add(3 * time.Hour)
-	postponedOcc, err := svc.Postpone(ctx, 1002, occ.ID, postponedDue)
+	postponedDue := f.clock.now.Add(time.Hour + 10*time.Minute).Add(3 * time.Hour)
+	postponedOcc, err := f.svc.Postpone(f.ctx, 1002, f.occ.ID, postponedDue)
 	if err != nil {
 		t.Fatalf("postpone failed: %v", err)
 	}
 
 	// At 12:00 (before new due 14:10) -> NOT due
-	dueAfterPostpone, err := svc.IsNotificationDue(ctx, postponedOcc, interval, clock.now.Add(2*time.Hour))
+	dueAfterPostpone, err := f.svc.IsNotificationDue(f.ctx, postponedOcc, interval, f.clock.now.Add(2*time.Hour))
 	if err != nil || dueAfterPostpone {
 		t.Fatalf("expected NO notification after postponement before new due time")
 	}
 
 	// At 14:10 -> due again
-	dueAtNewTime, err := svc.IsNotificationDue(ctx, postponedOcc, interval, postponedDue)
+	dueAtNewTime, err := f.svc.IsNotificationDue(f.ctx, postponedOcc, interval, postponedDue)
 	if err != nil || !dueAtNewTime {
 		t.Fatalf("expected notification due at new postponed time 14:10")
 	}
+	return postponedDue
+}
+
+func remindersTargetOnlyCheckComplete(t *testing.T, f *remindersTargetOnlyFixture, postponedDue time.Time) {
+	t.Helper()
+	interval := time.Hour
 
 	// 4. Complete by Bob with successor
-	completed, succ, err := svc.Complete(ctx, 1002, occ.ID, postponedDue)
+	completed, succ, err := f.svc.Complete(f.ctx, 1002, f.occ.ID, postponedDue)
 	if err != nil {
 		t.Fatalf("Bob complete failed: %v", err)
 	}
@@ -343,30 +380,44 @@ func TestReminders_TargetOnly_AndRepeatPolicy(t *testing.T) {
 	}
 
 	// Once completed, no more notifications
-	dueAfterComplete, err := svc.IsNotificationDue(ctx, completed, interval, postponedDue.Add(time.Hour))
+	dueAfterComplete, err := f.svc.IsNotificationDue(f.ctx, completed, interval, postponedDue.Add(time.Hour))
 	if err != nil || dueAfterComplete {
 		t.Fatalf("expected NO notification once completed")
 	}
+}
 
+func remindersTargetOnlyCheckListings(t *testing.T, f *remindersTargetOnlyFixture) {
+	t.Helper()
 	// 5. ListMyOpen: Alice sees 0, Bob sees his
-	aliceList, err := svc.ListMyOpen(ctx, 1001)
+	aliceList, err := f.svc.ListMyOpen(f.ctx, 1001)
 	if err != nil || len(aliceList.Occurrences) != 0 {
 		t.Fatalf("Alice should see 0 reminders")
 	}
-	bobList, err := svc.ListMyOpen(ctx, 1002)
+	bobList, err := f.svc.ListMyOpen(f.ctx, 1002)
 	if err != nil || len(bobList.Occurrences) != 1 {
 		t.Fatalf("Bob should see 1 open reminder (successor), got %d", len(bobList.Occurrences))
 	}
 
 	// Exercise ListDefinitions and GetOccurrence
-	defs, err := svc.ListDefinitions(ctx)
+	defs, err := f.svc.ListDefinitions(f.ctx)
 	if err != nil || len(defs) == 0 {
 		t.Fatalf("ListDefinitions failed: %v", err)
 	}
-	gotOcc, err := svc.GetOccurrence(ctx, occ.ID)
-	if err != nil || gotOcc.ID != occ.ID {
+	gotOcc, err := f.svc.GetOccurrence(f.ctx, f.occ.ID)
+	if err != nil || gotOcc.ID != f.occ.ID {
 		t.Fatalf("GetOccurrence failed: %v", err)
 	}
+}
+
+func TestReminders_TargetOnly_AndRepeatPolicy(t *testing.T) {
+	f := remindersTargetOnlyNewFixture()
+	remindersTargetOnlyCheckValidation(t, f)
+	remindersTargetOnlyScheduleOccurrence(t, f)
+	remindersTargetOnlyCheckTargetOnly(t, f)
+	remindersTargetOnlyCheckRepeatPolicy(t, f)
+	postponedDue := remindersTargetOnlyCheckPostpone(t, f)
+	remindersTargetOnlyCheckComplete(t, f, postponedDue)
+	remindersTargetOnlyCheckListings(t, f)
 }
 
 func TestReminders_ListUpcoming_ReadOnlyLookahead(t *testing.T) {

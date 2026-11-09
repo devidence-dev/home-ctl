@@ -247,128 +247,139 @@ func TestHTTPClient_GetUpdates(t *testing.T) {
 }
 
 func TestHTTPClient_SetMyCommands(t *testing.T) {
-	t.Run("chat scope with language code", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path != "/setMyCommands" {
-				t.Fatalf("unexpected path: %s", r.URL.Path)
-			}
-			var req map[string]interface{}
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				t.Fatalf("failed to decode request body: %v", err)
-			}
+	t.Run("chat scope with language code", clientTestSetMyCommandsChatScope)
+	t.Run("private scope with empty language code", clientTestSetMyCommandsPrivateScope)
+	t.Run("api error returned", clientTestSetMyCommandsAPIError)
+}
 
-			scope, ok := req["scope"].(map[string]interface{})
-			if !ok {
-				t.Fatalf("missing or invalid scope: %v", req["scope"])
-			}
-			if scope["type"] != "chat" {
-				t.Errorf("expected scope type 'chat', got %v", scope["type"])
-			}
-			if scope["chat_id"].(float64) != -1003916572365 {
-				t.Errorf("expected chat_id -1003916572365, got %v", scope["chat_id"])
-			}
+// clientTestSetMyCommandsRequest checks the request path and decodes the setMyCommands body.
+func clientTestSetMyCommandsRequest(t *testing.T, r *http.Request) map[string]interface{} {
+	t.Helper()
+	if r.URL.Path != "/setMyCommands" {
+		t.Fatalf("unexpected path: %s", r.URL.Path)
+	}
+	var req map[string]interface{}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		t.Fatalf("failed to decode request body: %v", err)
+	}
+	return req
+}
 
-			if req["language_code"] != "en" {
-				t.Errorf("expected language_code 'en', got %v", req["language_code"])
-			}
+// clientTestCheckChatScopeRequest checks the chat-scoped request body.
+func clientTestCheckChatScopeRequest(t *testing.T, req map[string]interface{}) {
+	t.Helper()
+	scope, ok := req["scope"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("missing or invalid scope: %v", req["scope"])
+	}
+	if scope["type"] != "chat" {
+		t.Errorf("expected scope type 'chat', got %v", scope["type"])
+	}
+	if scope["chat_id"].(float64) != -1003916572365 {
+		t.Errorf("expected chat_id -1003916572365, got %v", scope["chat_id"])
+	}
 
-			cmds, ok := req["commands"].([]interface{})
-			if !ok || len(cmds) != 2 {
-				t.Fatalf("expected 2 commands, got %v", req["commands"])
-			}
-			cmd0 := cmds[0].(map[string]interface{})
-			if cmd0["command"] != "add" || cmd0["description"] != "Add item" {
-				t.Errorf("unexpected command 0: %v", cmd0)
-			}
+	if req["language_code"] != "en" {
+		t.Errorf("expected language_code 'en', got %v", req["language_code"])
+	}
 
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
-		}))
-		defer server.Close()
+	cmds, ok := req["commands"].([]interface{})
+	if !ok || len(cmds) != 2 {
+		t.Fatalf("expected 2 commands, got %v", req["commands"])
+	}
+	cmd0 := cmds[0].(map[string]interface{})
+	if cmd0["command"] != "add" || cmd0["description"] != "Add item" {
+		t.Errorf("unexpected command 0: %v", cmd0)
+	}
+}
 
-		client := telegram.NewHTTPClientWithBaseURL(server.URL)
-		err := client.SetMyCommands(context.Background(),
-			telegram.BotCommandScope{Type: "chat", ChatID: -1003916572365},
-			"en",
-			[]telegram.BotCommand{
-				{Command: "add", Description: "Add item"},
-				{Command: "list", Description: "List items"},
-			},
-		)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+// clientTestCheckPrivateScopeRequest checks the private-chat request body.
+func clientTestCheckPrivateScopeRequest(t *testing.T, req map[string]interface{}) {
+	t.Helper()
+	scope, ok := req["scope"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("missing or invalid scope: %v", req["scope"])
+	}
+	if scope["type"] != "all_private_chats" {
+		t.Errorf("expected scope type 'all_private_chats', got %v", scope["type"])
+	}
+	if _, hasChatID := scope["chat_id"]; hasChatID {
+		t.Errorf("expected chat_id to be omitted, got %v", scope["chat_id"])
+	}
+
+	if _, hasLang := req["language_code"]; hasLang {
+		t.Errorf("expected language_code to be omitted for empty string, got %v", req["language_code"])
+	}
+
+	cmds, ok := req["commands"].([]interface{})
+	if !ok || len(cmds) != 1 {
+		t.Fatalf("expected 1 command, got %v", req["commands"])
+	}
+}
+
+func clientTestSetMyCommandsChatScope(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		clientTestCheckChatScopeRequest(t, clientTestSetMyCommandsRequest(t, r))
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+	}))
+	defer server.Close()
+
+	client := telegram.NewHTTPClientWithBaseURL(server.URL)
+	err := client.SetMyCommands(context.Background(),
+		telegram.BotCommandScope{Type: "chat", ChatID: -1003916572365},
+		"en",
+		[]telegram.BotCommand{
+			{Command: "add", Description: "Add item"},
+			{Command: "list", Description: "List items"},
+		},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func clientTestSetMyCommandsPrivateScope(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		clientTestCheckPrivateScopeRequest(t, clientTestSetMyCommandsRequest(t, r))
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+	}))
+	defer server.Close()
+
+	client := telegram.NewHTTPClientWithBaseURL(server.URL)
+	err := client.SetMyCommands(context.Background(),
+		telegram.BotCommandScope{Type: "all_private_chats"},
+		"",
+		[]telegram.BotCommand{
+			{Command: "start", Description: "Start bot"},
+		},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func clientTestSetMyCommandsAPIError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		resp := map[string]interface{}{
+			"ok":          false,
+			"description": "Bad Request: chat not found",
 		}
-	})
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
 
-	t.Run("private scope with empty language code", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path != "/setMyCommands" {
-				t.Fatalf("unexpected path: %s", r.URL.Path)
-			}
-			var req map[string]interface{}
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				t.Fatalf("failed to decode request body: %v", err)
-			}
-
-			scope, ok := req["scope"].(map[string]interface{})
-			if !ok {
-				t.Fatalf("missing or invalid scope: %v", req["scope"])
-			}
-			if scope["type"] != "all_private_chats" {
-				t.Errorf("expected scope type 'all_private_chats', got %v", scope["type"])
-			}
-			if _, hasChatID := scope["chat_id"]; hasChatID {
-				t.Errorf("expected chat_id to be omitted, got %v", scope["chat_id"])
-			}
-
-			if _, hasLang := req["language_code"]; hasLang {
-				t.Errorf("expected language_code to be omitted for empty string, got %v", req["language_code"])
-			}
-
-			cmds, ok := req["commands"].([]interface{})
-			if !ok || len(cmds) != 1 {
-				t.Fatalf("expected 1 command, got %v", req["commands"])
-			}
-
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
-		}))
-		defer server.Close()
-
-		client := telegram.NewHTTPClientWithBaseURL(server.URL)
-		err := client.SetMyCommands(context.Background(),
-			telegram.BotCommandScope{Type: "all_private_chats"},
-			"",
-			[]telegram.BotCommand{
-				{Command: "start", Description: "Start bot"},
-			},
-		)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	})
-
-	t.Run("api error returned", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			resp := map[string]interface{}{
-				"ok":          false,
-				"description": "Bad Request: chat not found",
-			}
-			_ = json.NewEncoder(w).Encode(resp)
-		}))
-		defer server.Close()
-
-		client := telegram.NewHTTPClientWithBaseURL(server.URL)
-		err := client.SetMyCommands(context.Background(),
-			telegram.BotCommandScope{Type: "chat", ChatID: 123},
-			"",
-			nil,
-		)
-		if err == nil {
-			t.Fatal("expected error, got nil")
-		}
-		if !strings.Contains(err.Error(), "telegram api error: Bad Request: chat not found") {
-			t.Errorf("unexpected error message: %v", err)
-		}
-	})
+	client := telegram.NewHTTPClientWithBaseURL(server.URL)
+	err := client.SetMyCommands(context.Background(),
+		telegram.BotCommandScope{Type: "chat", ChatID: 123},
+		"",
+		nil,
+	)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "telegram api error: Bad Request: chat not found") {
+		t.Errorf("unexpected error message: %v", err)
+	}
 }
 
 func TestDispatcher_Deduplication(t *testing.T) {

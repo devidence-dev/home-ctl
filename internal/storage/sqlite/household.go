@@ -33,15 +33,37 @@ func (s *HouseholdStore) SyncMembers(ctx context.Context, users []config.UserCon
 
 	for _, u := range users {
 		configIDs[u.ID] = true
-		locale := u.Locale
-		if locale == "" {
-			locale = defaultLocale
+		if err := upsertMember(ctx, tx, u, resolveLocale(u.Locale, defaultLocale), now); err != nil {
+			return err
 		}
-		if locale == "" {
-			locale = "en"
-		}
+	}
 
-		upsertQuery := `
+	// Deactivate any existing users in DB that are not in config
+	toDeactivate, err := staleUserIDs(ctx, tx, configIDs)
+	if err != nil {
+		return err
+	}
+	if err := deactivateUsers(ctx, tx, toDeactivate, now); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
+// resolveLocale returns the user locale, falling back to defaultLocale, then "en".
+func resolveLocale(userLocale, defaultLocale string) string {
+	if userLocale != "" {
+		return userLocale
+	}
+	if defaultLocale != "" {
+		return defaultLocale
+	}
+	return "en"
+}
+
+// upsertMember inserts or updates one config user and initializes its onboarding row.
+func upsertMember(ctx context.Context, tx *sql.Tx, u config.UserConfig, locale, now string) error {
+	upsertQuery := `
 INSERT INTO users (id, name, username, locale, active, created_at, updated_at)
 VALUES (?, ?, ?, ?, 1, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
@@ -51,23 +73,25 @@ ON CONFLICT(id) DO UPDATE SET
 	active = 1,
 	updated_at = excluded.updated_at;
 `
-		if _, err := tx.ExecContext(ctx, upsertQuery, u.ID, u.Name, u.Username, locale, now, now); err != nil {
-			return fmt.Errorf("failed to upsert user %d: %w", u.ID, err)
-		}
+	if _, err := tx.ExecContext(ctx, upsertQuery, u.ID, u.Name, u.Username, locale, now, now); err != nil {
+		return fmt.Errorf("failed to upsert user %d: %w", u.ID, err)
+	}
 
-		onboardingInit := `
+	onboardingInit := `
 INSERT OR IGNORE INTO user_onboarding (user_id, connected, updated_at)
 VALUES (?, 0, ?);
 `
-		if _, err := tx.ExecContext(ctx, onboardingInit, u.ID, now); err != nil {
-			return fmt.Errorf("failed to initialize onboarding for user %d: %w", u.ID, err)
-		}
+	if _, err := tx.ExecContext(ctx, onboardingInit, u.ID, now); err != nil {
+		return fmt.Errorf("failed to initialize onboarding for user %d: %w", u.ID, err)
 	}
+	return nil
+}
 
-	// Deactivate any existing users in DB that are not in config
+// staleUserIDs returns DB user IDs that are absent from configIDs.
+func staleUserIDs(ctx context.Context, tx *sql.Tx, configIDs map[int64]bool) ([]int64, error) {
 	rows, err := tx.QueryContext(ctx, "SELECT id FROM users")
 	if err != nil {
-		return fmt.Errorf("failed to query existing users: %w", err)
+		return nil, fmt.Errorf("failed to query existing users: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -75,23 +99,26 @@ VALUES (?, 0, ?);
 	for rows.Next() {
 		var id int64
 		if err := rows.Scan(&id); err != nil {
-			return fmt.Errorf("failed to scan user id: %w", err)
+			return nil, fmt.Errorf("failed to scan user id: %w", err)
 		}
 		if !configIDs[id] {
 			toDeactivate = append(toDeactivate, id)
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("error reading users rows: %w", err)
+		return nil, fmt.Errorf("error reading users rows: %w", err)
 	}
+	return toDeactivate, nil
+}
 
-	for _, id := range toDeactivate {
+// deactivateUsers marks the given user IDs inactive.
+func deactivateUsers(ctx context.Context, tx *sql.Tx, ids []int64, now string) error {
+	for _, id := range ids {
 		if _, err := tx.ExecContext(ctx, "UPDATE users SET active = 0, updated_at = ? WHERE id = ?", now, id); err != nil {
 			return fmt.Errorf("failed to deactivate user %d: %w", id, err)
 		}
 	}
-
-	return tx.Commit()
+	return nil
 }
 
 // GetMember retrieves a single member by user ID.

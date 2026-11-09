@@ -96,67 +96,79 @@ func TestOnboarding_StartStillRepliesHelp(t *testing.T) {
 }
 
 func TestUnconnectedNotice_ConnectButton(t *testing.T) {
-	ctx := context.Background()
-	chorePrompt := telegram.Update{Message: &telegram.Message{
+	t.Run("with username sends URL button", onboardingTestURLButtonNotice)
+	t.Run("without username sends no button", onboardingTestNoButtonNotice)
+	t.Run("start connect connects the member", onboardingTestStartConnect)
+}
+
+// onboardingTestChorePrompt is Charlie's unconnected /list in the group chore topic.
+func onboardingTestChorePrompt() telegram.Update {
+	return telegram.Update{Message: &telegram.Message{
 		MessageID:       3,
 		MessageThreadID: 51,
 		Chat:            telegram.Chat{ID: groupChatID, Type: "supergroup"},
 		From:            &telegram.User{ID: 103, FirstName: "Charlie"},
 		Text:            "/list",
 	}}
+}
 
-	t.Run("with username sends URL button", func(t *testing.T) {
-		env, err := setupTestEnv()
-		if err != nil {
-			t.Fatalf("failed to setup test env: %v", err)
-		}
-		if err := env.router.HandleUpdate(ctx, chorePrompt); err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		last := env.client.LastSent()
-		if last == nil || last.Markup == nil || len(last.Markup.InlineKeyboard) != 1 {
-			t.Fatalf("expected one button row on notice, got: %+v", last)
-		}
-		btn := last.Markup.InlineKeyboard[0][0]
-		if btn.URL != "https://t.me/home_ctl_bot?start=connect" || btn.CallbackData != "" {
-			t.Fatalf("expected connect URL button, got: %+v", btn)
-		}
-		if btn.Text != env.i18n.T("es", "general.connect_button") {
-			t.Fatalf("expected localized button label, got %q", btn.Text)
-		}
-	})
+func onboardingTestURLButtonNotice(t *testing.T) {
+	t.Helper()
+	ctx := context.Background()
+	env, err := setupTestEnv()
+	if err != nil {
+		t.Fatalf("failed to setup test env: %v", err)
+	}
+	if err := env.router.HandleUpdate(ctx, onboardingTestChorePrompt()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	last := env.client.LastSent()
+	if last == nil || last.Markup == nil || len(last.Markup.InlineKeyboard) != 1 {
+		t.Fatalf("expected one button row on notice, got: %+v", last)
+	}
+	btn := last.Markup.InlineKeyboard[0][0]
+	if btn.URL != "https://t.me/home_ctl_bot?start=connect" || btn.CallbackData != "" {
+		t.Fatalf("expected connect URL button, got: %+v", btn)
+	}
+	if btn.Text != env.i18n.T("es", "general.connect_button") {
+		t.Fatalf("expected localized button label, got %q", btn.Text)
+	}
+}
 
-	t.Run("without username sends no button", func(t *testing.T) {
-		env, err := setupTestEnv()
-		if err != nil {
-			t.Fatalf("failed to setup test env: %v", err)
-		}
-		router := telegram.NewRouter(telegram.RouterConfig{
-			ChatID:           groupChatID,
-			ShoppingTopicID:  42,
-			ChoresTopicID:    51,
-			RemindersTopicID: 63,
-			DefaultLocale:    "en",
-		}, telegram.RouterDeps{Client: env.client, Household: env.household, Shopping: env.shopping, Chores: env.chores, Reminders: env.reminders, Flow: env.flow, I18n: env.i18n, Clock: env.clock})
-		if err := router.HandleUpdate(ctx, chorePrompt); err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		last := env.client.LastSent()
-		if last == nil || last.Markup != nil {
-			t.Fatalf("expected notice without button, got: %+v", last)
-		}
-	})
+func onboardingTestNoButtonNotice(t *testing.T) {
+	t.Helper()
+	ctx := context.Background()
+	env, err := setupTestEnv()
+	if err != nil {
+		t.Fatalf("failed to setup test env: %v", err)
+	}
+	router := telegram.NewRouter(telegram.RouterConfig{
+		ChatID:           groupChatID,
+		ShoppingTopicID:  42,
+		ChoresTopicID:    51,
+		RemindersTopicID: 63,
+		DefaultLocale:    "en",
+	}, telegram.RouterDeps{Client: env.client, Household: env.household, Shopping: env.shopping, Chores: env.chores, Reminders: env.reminders, Flow: env.flow, I18n: env.i18n, Clock: env.clock})
+	if err := router.HandleUpdate(ctx, onboardingTestChorePrompt()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	last := env.client.LastSent()
+	if last == nil || last.Markup != nil {
+		t.Fatalf("expected notice without button, got: %+v", last)
+	}
+}
 
-	t.Run("start connect connects the member", func(t *testing.T) {
-		env, err := setupTestEnv()
-		if err != nil {
-			t.Fatalf("failed to setup test env: %v", err)
-		}
-		if err := env.router.HandleUpdate(ctx, privateMessage(103, "/start connect")); err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		assertConnected(t, env, 103, true)
-	})
+func onboardingTestStartConnect(t *testing.T) {
+	t.Helper()
+	ctx := context.Background()
+	env, err := setupTestEnv()
+	if err != nil {
+		t.Fatalf("failed to setup test env: %v", err)
+	}
+	if err := env.router.HandleUpdate(ctx, privateMessage(103, "/start connect")); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertConnected(t, env, 103, true)
 }
 
 func assertConnected(t *testing.T, env *testEnv, userID int64, want bool) {

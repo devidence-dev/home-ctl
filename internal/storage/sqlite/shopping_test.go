@@ -27,6 +27,15 @@ func TestShoppingStore_ConcurrentPurchaseAndConstraints(t *testing.T) {
 
 	shopStore := sqlite.NewShoppingStore(db)
 
+	item, entry := shoppingStoreCreateItemAndPendingEntry(ctx, t, shopStore)
+	shoppingStoreConcurrentPurchase(ctx, t, shopStore, entry.ID)
+	shoppingStoreVerifyAndRelist(ctx, t, shopStore, item, entry)
+}
+
+// shoppingStoreCreateItemAndPendingEntry creates the item and its pending entry, and checks
+// both duplicate-rejection rules.
+func shoppingStoreCreateItemAndPendingEntry(ctx context.Context, t *testing.T, shopStore *sqlite.ShoppingStore) (*shopping.Item, *shopping.Entry) {
+	t.Helper()
 	// Create item
 	item, err := shopStore.CreateItem(ctx, shopping.Item{
 		Name:      "Eggs",
@@ -68,7 +77,13 @@ func TestShoppingStore_ConcurrentPurchaseAndConstraints(t *testing.T) {
 	if !errors.Is(err, shopping.ErrEntryAlreadyPending) {
 		t.Fatalf("expected ErrEntryAlreadyPending, got %v", err)
 	}
+	return item, entry
+}
 
+// shoppingStoreConcurrentPurchase has Alice and Bob purchase the same entry at once and checks
+// that exactly one purchase wins.
+func shoppingStoreConcurrentPurchase(ctx context.Context, t *testing.T, shopStore *sqlite.ShoppingStore, entryID int64) {
+	t.Helper()
 	// Concurrent purchase by Alice and Bob
 	var wg sync.WaitGroup
 	results := make([]error, 2)
@@ -79,7 +94,7 @@ func TestShoppingStore_ConcurrentPurchaseAndConstraints(t *testing.T) {
 		idx := i
 		go func() {
 			defer wg.Done()
-			_, err := shopStore.PurchaseEntry(ctx, entry.ID, purchasers[idx], time.Now().UTC())
+			_, err := shopStore.PurchaseEntry(ctx, entryID, purchasers[idx], time.Now().UTC())
 			results[idx] = err
 		}()
 	}
@@ -100,7 +115,12 @@ func TestShoppingStore_ConcurrentPurchaseAndConstraints(t *testing.T) {
 	if successes != 1 || alreadyPurchased != 1 {
 		t.Fatalf("expected 1 success and 1 ErrAlreadyPurchased, got %d successes and %d alreadyPurchased", successes, alreadyPurchased)
 	}
+}
 
+// shoppingStoreVerifyAndRelist checks the purchased state, re-adds the item, and exercises the
+// list and get methods.
+func shoppingStoreVerifyAndRelist(ctx context.Context, t *testing.T, shopStore *sqlite.ShoppingStore, item *shopping.Item, entry *shopping.Entry) {
+	t.Helper()
 	// Verify final entry state has purchaser and is marked purchased
 	finalEntry, err := shopStore.GetEntry(ctx, entry.ID)
 	if err != nil {
